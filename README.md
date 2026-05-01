@@ -16,8 +16,8 @@ curl -sSL https://raw.githubusercontent.com/reachvaibab-gif/nim-agent/main/setup
 
 ### 2. Key Provisioning
 *   **Source**: [build.nvidia.com](https://build.nvidia.com)
-*   **Account**: Sign up for a free developer account (1,000 free credits included).
-*   **Model**: Search for `Qwen 2.5 Coder 32B` or `Llama 3.1 405B`.
+*   **Account**: Sign up for a free developer account.
+*   **Model**: Search for `Qwen3 coder 480b a35b instruct` or `Llama 3.1 405B`.
 *   **Extraction**: Click "Get API Key" and copy the token (starts with `nvapi-`).
 
 ### 3. Execution
