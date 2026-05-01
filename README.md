@@ -42,4 +42,4 @@ When prompted for the **API Key**, paste your `nvapi-` token. The system is pre-
 - `meta/llama-3.1-405b` — **Best for high-level agentic planning.**
 
 ---
-*Maintained by reachvaibab-gif. Zero dependencies beyond Node.js.*
+*Maintained by Vai Bab. Zero dependencies beyond Node.js.*
