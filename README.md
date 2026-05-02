@@ -1,45 +1,55 @@
-# ⚡ NIM-Agent
+# ⚡ NIM-Agent: NVIDIA NIM Configuration Guide
 
-**High-performance Claude Code distribution powered by NVIDIA NIM.**
-
-NIM-Agent is a surgically-patched version of the Claude Code CLI (via OpenClaude) that redirects all inference traffic through **NVIDIA's integration endpoints**. This enables the use of 400B+ parameter models (Qwen, Llama 3.1) with ultra-low latency and zero configuration.
+This repository provides instructions on how to use the standard **OpenClaude** CLI with **NVIDIA NIM** inference endpoints.
 
 ---
 
-## 🚀 Rapid Deployment
+## 🚀 1. Install OpenClaude
+Install the vanilla OpenClaude CLI globally on your system:
 
-### 1. Install & Patch
-Execute this command to install the base engine and inject the NIM-backend overrides.
 ```bash
-curl -sSL https://raw.githubusercontent.com/reachvaibab-gif/nim-agent/main/setup-nim.sh | bash
+sudo npm install -g @gitlawb/openclaude
 ```
 
-### 2. Key Provisioning
-*   **Source**: [build.nvidia.com](https://build.nvidia.com)
-*   **Account**: Sign up for a free developer account.
-*   **Model**: Search for `Qwen3 coder 480b a35b instruct` or `Llama 3.1 405B`.
-*   **Extraction**: Click "Get API Key" and copy the token (starts with `nvapi-`).
+---
 
-### 3. Execution
-Launch the agent:
+## 🔑 2. Get your NVIDIA NIM Key
+1. Go to [build.nvidia.com](https://build.nvidia.com).
+2. Create a free account (includes 1,000 free credits).
+3. Search for a model (e.g., **Qwen 2.5 Coder 32B**).
+4. Click **Get API Key** and copy the `nvapi-` token.
+
+---
+
+## ⚙️ 3. Configure for NVIDIA NIM
+To route OpenClaude traffic through NVIDIA, you must set the following environment variables in your terminal. 
+
+### Option A: Temporary (Current Session)
+Run these commands before launching the CLI:
+
+```bash
+export CLAUDE_CODE_USE_OPENAI=1
+export OPENAI_BASE_URL="https://integrate.api.nvidia.com/v1"
+export OPENAI_API_KEY="your-nvapi-key-here"
+export OPENAI_MODEL="nvidia/qwen-2.5-coder-32b"
+```
+
+### Option B: Permanent (Recommended)
+Add the exports to your shell profile (`~/.zshrc` or `~/.bashrc`):
+
+```bash
+echo 'export CLAUDE_CODE_USE_OPENAI=1' >> ~/.zshrc
+echo 'export OPENAI_BASE_URL="https://integrate.api.nvidia.com/v1"' >> ~/.zshrc
+echo 'export OPENAI_API_KEY="your-nvapi-key-here"' >> ~/.zshrc
+echo 'export OPENAI_MODEL="nvidia/qwen-2.5-coder-32b"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+---
+
+## 🏎️ 4. Launch
+Once configured, simply run:
 ```bash
 openclaude
 ```
-When prompted for the **API Key**, paste your `nvapi-` token. The system is pre-configured to handle the routing automatically.
-
----
-
-## 🛠️ Technical Specifications
-
-### What the Patch Does:
-- **Kernel Override**: Injects `process.env.OPENAI_BASE_URL` directly into the bundled binary.
-- **Provider Priority**: Reorders the selection menu to default to **NVIDIA NIM**.
-- **Model Tagging**: Adds `(Recommended)` labels to high-performance coding models.
-- **Transport Hardening**: Enforces OpenAI-compatible protocol headers for NIM integration.
-
-### Recommended Models:
-- `nvidia/qwen-2.5-coder-32b` — **Best for complex logic and refactoring.**
-- `meta/llama-3.1-405b` — **Best for high-level agentic planning.**
-
----
-*Maintained by Vai Bab. Zero dependencies beyond Node.js.*
+The agent will now use NVIDIA NIM for all coding and reasoning tasks.
