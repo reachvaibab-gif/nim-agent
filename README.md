@@ -41,8 +41,22 @@ nvm install 20
 nvm use 20
 ```
 
-**Windows:**
-Download the LTS installer from [nodejs.org](https://nodejs.org) and run it.
+**Windows** (CMD):
+
+Option A — using `winget` (built into Windows 10/11):
+```cmd
+winget install OpenJS.NodeJS.LTS
+```
+
+Option B — using Chocolatey (if installed):
+```cmd
+choco install nodejs-lts
+```
+
+Option C — manual download:
+1. Go to [nodejs.org](https://nodejs.org) and download the **LTS** installer
+2. Run the `.msi` file and follow the setup wizard
+3. Restart your Command Prompt after installation
 
 Verify your install:
 ```bash
