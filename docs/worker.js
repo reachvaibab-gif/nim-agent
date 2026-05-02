@@ -758,10 +758,15 @@ function buildSystemMessages(config, body, agent) {
 }
 
 function resolveModel(requested, config, agent) {
-  const allowed =
+  // allowedModels may be [{id,name}] objects (DEFAULT_MODELS) or plain strings (KV stored)
+  const rawAllowed =
     Array.isArray(config.allowedModels) && config.allowedModels.length
       ? config.allowedModels
       : DEFAULT_MODELS;
+  // Normalise to string IDs
+  const allowed = rawAllowed.map((m) =>
+    typeof m === "string" ? m : m?.id || "",
+  ).filter(Boolean);
   const preferred =
     agent?.model || requested || config.defaultModel || DEFAULT_MODEL;
   return allowed.includes(preferred)
