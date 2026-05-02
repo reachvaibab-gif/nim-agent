@@ -1,10 +1,8 @@
-/* ── app.js — NIM Chat ───────────────────────────────────────
-   Full state management, streaming API, markdown rendering,
-   conversation history (localStorage), auto-resize textarea.
+/* ── app.js v3 — NIM Chat ────────────────────────────────────
+   Features: streaming, markdown, conversation history,
+   delete chats, temporary chats, localStorage persistence
 ──────────────────────────────────────────────────────────── */
 
-// API endpoint — proxied through your Cloudflare Worker to fix CORS
-// Set proxyUrl in settings to your deployed Worker URL
 function getNimEndpoint() {
   return state.proxyUrl || 'https://integrate.api.nvidia.com/v1/chat/completions';
 }
@@ -14,28 +12,35 @@ let state = {
   apiKey: '',
   model: 'qwen/qwen3-coder-480b-a35b-instruct',
   systemPrompt: 'You are a helpful, accurate, and thoughtful AI assistant.',
-  proxyUrl: '',        // Cloudflare Worker URL — required for browser CORS
-  conversations: {},   // id → { title, messages: [] }
+  proxyUrl: '',
+  conversations: {},
   activeId: null,
   generating: false,
   abortController: null,
 };
 
+let pendingDeleteId = null;
+
 // ── STORAGE ────────────────────────────────────────────────
 function save() {
-  localStorage.setItem('nim_state', JSON.stringify({
+  // Exclude temporary chats from persistence
+  const savedConvs = {};
+  for (const [id, conv] of Object.entries(state.conversations)) {
+    if (!conv.temp) savedConvs[id] = conv;
+  }
+  localStorage.setItem('nim_v3', JSON.stringify({
     apiKey: state.apiKey,
     model: state.model,
     systemPrompt: state.systemPrompt,
     proxyUrl: state.proxyUrl,
-    conversations: state.conversations,
-    activeId: state.activeId,
+    conversations: savedConvs,
+    activeId: state.conversations[state.activeId]?.temp ? null : state.activeId,
   }));
 }
 
 function load() {
   try {
-    const raw = localStorage.getItem('nim_state');
+    const raw = localStorage.getItem('nim_v3');
     if (!raw) return false;
     const data = JSON.parse(raw);
     Object.assign(state, data);
@@ -47,36 +52,40 @@ function load() {
 window.addEventListener('DOMContentLoaded', () => {
   const hasKey = load();
 
-  // Configure marked
   marked.setOptions({ breaks: true, gfm: true });
 
-  // Wire up onboarding
+  // Onboarding
   document.getElementById('startBtn').addEventListener('click', onboardingSubmit);
   document.getElementById('apiKeyInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') onboardingSubmit();
   });
 
-  // Wire up main UI
-  document.getElementById('newChatBtn').addEventListener('click', newChat);
-  document.getElementById('sendBtn').addEventListener('click', sendMessage);
+  // Sidebar
+  document.getElementById('newChatBtn').addEventListener('click', () => newChat());
+  document.getElementById('tempChatBtn').addEventListener('click', () => newTempChat());
   document.getElementById('sidebarToggle').addEventListener('click', toggleSidebar);
+
+  // Settings
   document.getElementById('settingsBtn').addEventListener('click', openSettings);
   document.getElementById('settingsClose').addEventListener('click', closeSettings);
   document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
   document.getElementById('clearDataBtn').addEventListener('click', clearAllData);
-  document.getElementById('stopBtn').addEventListener('click', stopGeneration);
-
-  // Suggestion chips
-  document.querySelectorAll('.suggestion-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.getElementById('messageInput').value = btn.dataset.msg;
-      autoResize(document.getElementById('messageInput'));
-      updateSendBtn();
-      document.getElementById('messageInput').focus();
-    });
+  document.getElementById('settingsModal').addEventListener('click', e => {
+    if (e.target === document.getElementById('settingsModal')) closeSettings();
   });
 
-  // Textarea auto-resize + send on Enter
+  // Delete confirm
+  document.getElementById('deleteCancelBtn').addEventListener('click', () => {
+    pendingDeleteId = null;
+    document.getElementById('deleteModal').classList.add('hidden');
+  });
+  document.getElementById('deleteConfirmBtn').addEventListener('click', confirmDelete);
+
+  // Stop
+  document.getElementById('stopBtn').addEventListener('click', stopGeneration);
+
+  // Send
+  document.getElementById('sendBtn').addEventListener('click', sendMessage);
   const input = document.getElementById('messageInput');
   input.addEventListener('input', () => { autoResize(input); updateSendBtn(); });
   input.addEventListener('keydown', e => {
@@ -86,9 +95,14 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Click outside settings to close
-  document.getElementById('settingsModal').addEventListener('click', e => {
-    if (e.target === document.getElementById('settingsModal')) closeSettings();
+  // Suggestion chips
+  document.querySelectorAll('.chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      input.value = btn.dataset.msg;
+      autoResize(input);
+      updateSendBtn();
+      input.focus();
+    });
   });
 
   if (hasKey) {
@@ -101,12 +115,13 @@ function onboardingSubmit() {
   const key = document.getElementById('apiKeyInput').value.trim();
   const proxyEl = document.getElementById('proxyUrlInput');
   const proxy = proxyEl ? proxyEl.value.trim() : '';
+
   if (!key.startsWith('nvapi-')) {
-    showInputError('apiKeyInput', 'Key must start with nvapi-');
+    flashError('apiKeyInput', 'Key must start with nvapi-');
     return;
   }
   if (proxyEl && !proxy) {
-    showInputError('proxyUrlInput', 'Proxy URL is required — see instructions');
+    flashError('proxyUrlInput', 'Required — see proxy setup instructions');
     return;
   }
   state.apiKey = key;
@@ -116,68 +131,132 @@ function onboardingSubmit() {
   showApp();
 }
 
-function showInputError(id, msg) {
+function flashError(id, msg) {
   const el = document.getElementById(id);
+  if (!el) return;
+  const orig = el.placeholder;
   el.style.borderColor = '#e53e3e';
   el.placeholder = msg;
-  setTimeout(() => {
-    el.style.borderColor = '';
-    el.placeholder = el.id === 'apiKeyInput' ? 'nvapi-xxxxxxxxxxxxxxxxxxxx' : '';
-  }, 2000);
+  setTimeout(() => { el.style.borderColor = ''; el.placeholder = orig; }, 2500);
 }
 
 function showApp() {
   document.getElementById('onboarding').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   updateModelBadge();
-  renderConversationList();
-
+  renderSidebar();
   if (state.activeId && state.conversations[state.activeId]) {
     renderMessages();
   } else {
-    newChat(false);
+    newChat();
   }
-
   document.getElementById('messageInput').focus();
 }
 
 // ── CONVERSATIONS ──────────────────────────────────────────
-function newChat(save_ = true) {
-  const id = `chat_${Date.now()}`;
-  state.conversations[id] = { title: 'New Chat', messages: [] };
+function newChat() {
+  const id = `c_${Date.now()}`;
+  state.conversations[id] = { title: 'New chat', messages: [], temp: false };
   state.activeId = id;
-  if (save_) save();
-  renderConversationList();
+  save();
+  renderSidebar();
   renderMessages();
+  document.getElementById('messageInput').focus();
+}
+
+function newTempChat() {
+  const id = `t_${Date.now()}`;
+  state.conversations[id] = { title: '⚡ Temporary', messages: [], temp: true };
+  state.activeId = id;
+  renderSidebar();
+  renderMessages();
+  updateTempBadge();
   document.getElementById('messageInput').focus();
 }
 
 function selectConversation(id) {
   state.activeId = id;
-  renderConversationList();
+  save();
+  renderSidebar();
   renderMessages();
+  updateTempBadge();
 }
 
-function renderConversationList() {
-  const list = document.getElementById('conversationList');
-  const ids = Object.keys(state.conversations).reverse();
+function deleteConversation(id, e) {
+  e.stopPropagation();
+  pendingDeleteId = id;
+  document.getElementById('deleteModal').classList.remove('hidden');
+}
 
-  if (ids.length === 0) {
-    list.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:var(--text-faint)">No conversations yet</div>';
+function confirmDelete() {
+  if (!pendingDeleteId) return;
+  const wasActive = pendingDeleteId === state.activeId;
+  delete state.conversations[pendingDeleteId];
+  pendingDeleteId = null;
+  document.getElementById('deleteModal').classList.add('hidden');
+
+  if (wasActive) {
+    const ids = Object.keys(state.conversations);
+    state.activeId = ids.length ? ids[ids.length - 1] : null;
+    if (!state.activeId) newChat(); else renderMessages();
+  }
+  save();
+  renderSidebar();
+}
+
+// ── SIDEBAR RENDER ─────────────────────────────────────────
+function renderSidebar() {
+  const list = document.getElementById('conversationList');
+  const all = Object.entries(state.conversations).reverse();
+
+  if (all.length === 0) {
+    list.innerHTML = `<div style="padding:12px 10px;font-size:12px;color:var(--faint)">No conversations yet</div>`;
     return;
   }
 
-  list.innerHTML = ids.map(id => {
-    const conv = state.conversations[id];
-    const active = id === state.activeId ? 'active' : '';
-    return `
-      <div class="conv-item ${active}" onclick="selectConversation('${id}')">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-        ${escHtml(conv.title)}
-      </div>`;
-  }).join('');
+  // Group by: temporary, today, yesterday, older
+  const temp = all.filter(([, c]) => c.temp);
+  const saved = all.filter(([, c]) => !c.temp);
+
+  const now = Date.now();
+  const today = saved.filter(([id]) => now - idTs(id) < 86400000);
+  const yesterday = saved.filter(([id]) => {
+    const age = now - idTs(id);
+    return age >= 86400000 && age < 172800000;
+  });
+  const older = saved.filter(([id]) => now - idTs(id) >= 172800000);
+
+  let html = '';
+  if (temp.length) {
+    html += group('Temporary', temp);
+  }
+  if (today.length) html += group('Today', today);
+  if (yesterday.length) html += group('Yesterday', yesterday);
+  if (older.length) html += group('Older', older);
+
+  list.innerHTML = html;
+}
+
+function idTs(id) {
+  const n = parseInt(id.split('_')[1]);
+  return isNaN(n) ? 0 : n;
+}
+
+function group(label, items) {
+  return `<div class="conv-group-label">${label}</div>` +
+    items.map(([id, conv]) => {
+      const active = id === state.activeId ? 'active' : '';
+      return `
+        <div class="conv-item ${active}" onclick="selectConversation('${id}')">
+          ${conv.temp ? `<div class="conv-temp-dot"></div>` : ''}
+          <span class="conv-item-text">${escHtml(conv.title)}</span>
+          <button class="conv-delete" onclick="deleteConversation('${id}',event)" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>`;
+    }).join('');
 }
 
 // ── RENDER MESSAGES ────────────────────────────────────────
@@ -185,6 +264,7 @@ function renderMessages() {
   const container = document.getElementById('messages');
   const emptyState = document.getElementById('emptyState');
   const conv = state.conversations[state.activeId];
+  updateTempBadge();
 
   if (!conv || conv.messages.length === 0) {
     container.innerHTML = '';
@@ -195,99 +275,76 @@ function renderMessages() {
   }
 
   emptyState.classList.add('hidden');
-
-  container.innerHTML = conv.messages.map((msg, i) => buildMessageHTML(msg, i)).join('');
-
-  // Apply syntax highlighting to all code blocks
+  container.innerHTML = conv.messages.map((m, i) => buildMsgHTML(m, i)).join('');
   container.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
-
   scrollToBottom();
 }
 
-function buildMessageHTML(msg, index) {
+function buildMsgHTML(msg, i) {
   if (msg.role === 'user') {
-    return `
-      <div class="message user" id="msg_${index}">
-        <div class="msg-avatar">U</div>
-        <div class="msg-content">${escHtml(msg.content)}</div>
-      </div>`;
-  }
-
-  const rendered = renderMarkdown(msg.content);
-  return `
-    <div class="message assistant" id="msg_${index}">
-      <div class="msg-avatar">
-        <svg width="18" height="18" viewBox="0 0 40 40" fill="none">
-          <rect width="40" height="40" rx="10" fill="#76b900"/>
-          <path d="M10 28L20 12L30 28H10Z" fill="white"/>
-        </svg>
-      </div>
-      <div class="msg-content">${rendered}</div>
+    return `<div class="message user" id="msg_${i}">
+      <div class="msg-avatar">U</div>
+      <div class="msg-content">${escHtml(msg.content)}</div>
     </div>`;
+  }
+  return `<div class="message assistant" id="msg_${i}">
+    <div class="msg-avatar">
+      <svg width="16" height="16" viewBox="0 0 40 40" fill="none">
+        <rect width="40" height="40" rx="8" fill="#76b900"/>
+        <path d="M10 28L20 12L30 28H10Z" fill="white"/>
+      </svg>
+    </div>
+    <div class="msg-content">${renderMarkdown(msg.content)}</div>
+  </div>`;
 }
 
 function renderMarkdown(text) {
   let html = marked.parse(text || '');
-
-  // Inject code headers with copy button + language label
-  html = html.replace(/<pre><code class="language-(\w+)">/g, (_, lang) => {
-    return `<pre><div class="code-header"><span class="code-lang">${escHtml(lang)}</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code class="language-${escHtml(lang)}">`;
-  });
-
-  // Code blocks without language
+  html = html.replace(/<pre><code class="language-(\w+)">/g, (_, lang) =>
+    `<pre><div class="code-header"><span class="code-lang">${escHtml(lang)}</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code class="language-${escHtml(lang)}">`
+  );
   html = html.replace(/<pre><code(?! class)>/g,
     `<pre><div class="code-header"><span class="code-lang">code</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code>`
   );
-
   return html;
 }
 
 // ── SEND MESSAGE ───────────────────────────────────────────
 async function sendMessage() {
   if (state.generating) return;
-
   const input = document.getElementById('messageInput');
   const text = input.value.trim();
   if (!text) return;
 
-  // Clear input
   input.value = '';
   autoResize(input);
   updateSendBtn();
-
-  // Hide empty state
   document.getElementById('emptyState').classList.add('hidden');
 
   const conv = state.conversations[state.activeId];
   conv.messages.push({ role: 'user', content: text });
 
-  // Auto-title after first message
-  if (conv.messages.length === 1) {
-    conv.title = text.slice(0, 42) + (text.length > 42 ? '…' : '');
-    renderConversationList();
+  if (conv.messages.length === 1 && conv.title === 'New chat') {
+    conv.title = text.slice(0, 40) + (text.length > 40 ? '…' : '');
+    renderSidebar();
   }
 
-  // Render user message
-  appendMessageDOM({ role: 'user', content: text }, conv.messages.length - 1);
+  appendMsgDOM({ role: 'user', content: text }, conv.messages.length - 1);
 
-  // Placeholder for assistant
-  const assistantIndex = conv.messages.length;
+  const assistantIdx = conv.messages.length;
   conv.messages.push({ role: 'assistant', content: '' });
-  const assistantEl = appendMessageDOM({ role: 'assistant', content: '' }, assistantIndex);
+  const assistantEl = appendMsgDOM({ role: 'assistant', content: '' }, assistantIdx);
   assistantEl.querySelector('.msg-content').classList.add('typing-cursor');
 
   scrollToBottom();
 
-  // Start generation
   state.generating = true;
   state.abortController = new AbortController();
   document.getElementById('stopBtn').classList.remove('hidden');
   document.getElementById('sendBtn').disabled = true;
 
   try {
-    const messages = buildMessages(conv.messages.slice(0, -1));
-    const endpoint = getNimEndpoint();
-    const response = await fetch(endpoint, {
+    const response = await fetch(getNimEndpoint(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -296,7 +353,7 @@ async function sendMessage() {
       signal: state.abortController.signal,
       body: JSON.stringify({
         model: state.model,
-        messages,
+        messages: buildMessages(conv.messages.slice(0, -1)),
         stream: true,
         max_tokens: 4096,
         temperature: 0.6,
@@ -308,46 +365,42 @@ async function sendMessage() {
       throw new Error(err?.detail || err?.message || `HTTP ${response.status}`);
     }
 
-    await streamResponse(response, assistantEl, conv, assistantIndex);
+    await streamResponse(response, assistantEl, conv, assistantIdx);
 
   } catch (err) {
-    if (err.name === 'AbortError') {
-      // Stopped by user — keep partial content
-    } else {
-      let errMsg = `⚠️ Error: ${err.message}`;
-      if (err.message.includes('fetch') || err.message.includes('network') || err.message.includes('Failed')) {
-        errMsg = `⚠️ CORS / Network Error\n\nYour Cloudflare Worker proxy URL may be incorrect or not deployed.\n\nOpen Settings and verify your Proxy URL.`;
-      }
-      conv.messages[assistantIndex].content = errMsg;
-      const contentEl = assistantEl.querySelector('.msg-content');
-      contentEl.textContent = errMsg;
+    if (err.name !== 'AbortError') {
+      const isCors = err.message.toLowerCase().includes('fetch') ||
+                     err.message.toLowerCase().includes('failed') ||
+                     err.message.toLowerCase().includes('network');
+      const msg = isCors
+        ? '⚠️ CORS / Network Error\n\nCheck your Proxy URL in Settings.'
+        : `⚠️ Error: ${err.message}`;
+      conv.messages[assistantIdx].content = msg;
+      assistantEl.querySelector('.msg-content').textContent = msg;
     }
   } finally {
     finishGeneration(assistantEl);
-    save();
+    if (!conv.temp) save();
   }
 }
 
 function buildMessages(msgs) {
   const out = [];
-  if (state.systemPrompt) {
-    out.push({ role: 'system', content: state.systemPrompt });
-  }
+  if (state.systemPrompt) out.push({ role: 'system', content: state.systemPrompt });
   out.push(...msgs.map(m => ({ role: m.role, content: m.content })));
   return out;
 }
 
-async function streamResponse(response, assistantEl, conv, index) {
+async function streamResponse(response, el, conv, idx) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  const contentEl = assistantEl.querySelector('.msg-content');
+  const contentEl = el.querySelector('.msg-content');
   let buffer = '';
-  let fullText = '';
+  let full = '';
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop();
@@ -356,26 +409,24 @@ async function streamResponse(response, assistantEl, conv, index) {
       if (!line.startsWith('data: ')) continue;
       const data = line.slice(6).trim();
       if (data === '[DONE]') return;
-
       try {
-        const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta?.content;
+        const delta = JSON.parse(data)?.choices?.[0]?.delta?.content;
         if (delta) {
-          fullText += delta;
-          conv.messages[index].content = fullText;
-          contentEl.innerHTML = renderMarkdown(fullText);
+          full += delta;
+          conv.messages[idx].content = full;
+          contentEl.innerHTML = renderMarkdown(full);
           contentEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
           scrollToBottom();
         }
-      } catch { /* ignore parse errors in stream */ }
+      } catch { /* ignore */ }
     }
   }
 }
 
-function finishGeneration(assistantEl) {
+function finishGeneration(el) {
   state.generating = false;
   state.abortController = null;
-  assistantEl.querySelector('.msg-content').classList.remove('typing-cursor');
+  el.querySelector('.msg-content').classList.remove('typing-cursor');
   document.getElementById('stopBtn').classList.add('hidden');
   updateSendBtn();
 }
@@ -385,22 +436,15 @@ function stopGeneration() {
 }
 
 // ── DOM HELPERS ────────────────────────────────────────────
-function appendMessageDOM(msg, index) {
-  const emptyState = document.getElementById('emptyState');
-  if (!emptyState.classList.contains('hidden')) {
-    emptyState.classList.add('hidden');
-  }
-
-  const container = document.getElementById('messages');
+function appendMsgDOM(msg, idx) {
+  const messages = document.getElementById('messages');
   const div = document.createElement('div');
-  div.innerHTML = buildMessageHTML(msg, index);
+  div.innerHTML = buildMsgHTML(msg, idx);
   const el = div.firstElementChild;
-  container.appendChild(el);
-
+  messages.appendChild(el);
   if (msg.role === 'assistant') {
     el.querySelectorAll('pre code').forEach(e => hljs.highlightElement(e));
   }
-
   return el;
 }
 
@@ -423,30 +467,34 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('collapsed');
 }
 
+function updateTempBadge() {
+  const conv = state.conversations[state.activeId];
+  const badge = document.getElementById('tempBadge');
+  if (conv?.temp) badge.classList.remove('hidden');
+  else badge.classList.add('hidden');
+}
+
 function escHtml(str) {
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function copyCode(btn) {
   const code = btn.closest('pre').querySelector('code');
   navigator.clipboard.writeText(code.innerText).then(() => {
     btn.textContent = 'Copied!';
-    setTimeout(() => btn.textContent = 'Copy', 2000);
+    setTimeout(() => btn.textContent = 'Copy', 1800);
   });
 }
 
-function modelLabel(model) {
-  const map = {
-    'qwen/qwen3-coder-480b-a35b-instruct': 'Qwen3 Coder 480B A35B Instruct',
-    'meta/llama-3.1-405b-instruct': 'Llama 3.1 405B Instruct',
+function modelLabel(m) {
+  return {
+    'qwen/qwen3-coder-480b-a35b-instruct': 'Qwen3 Coder 480B',
+    'meta/llama-3.1-405b-instruct': 'Llama 3.1 405B',
     'nvidia/llama-3.1-nemotron-ultra-253b-v1': 'Nemotron Ultra 253B',
     'mistralai/mistral-large-2-instruct': 'Mistral Large 2',
-  };
-  return map[model] || model;
+  }[m] || m;
 }
 
 function updateModelBadge() {
@@ -457,9 +505,9 @@ function updateModelBadge() {
 // ── SETTINGS ───────────────────────────────────────────────
 function openSettings() {
   document.getElementById('settingsApiKey').value = state.apiKey;
+  document.getElementById('settingsProxyUrl').value = state.proxyUrl;
   document.getElementById('settingsModel').value = state.model;
   document.getElementById('settingsSystemPrompt').value = state.systemPrompt;
-  document.getElementById('settingsProxyUrl').value = state.proxyUrl;
   document.getElementById('settingsModal').classList.remove('hidden');
 }
 
@@ -468,19 +516,19 @@ function closeSettings() {
 }
 
 function saveSettings() {
-  const key = document.getElementById('settingsApiKey').value.trim();
-  if (key) state.apiKey = key;
+  const k = document.getElementById('settingsApiKey').value.trim();
+  if (k) state.apiKey = k;
+  const p = document.getElementById('settingsProxyUrl').value.trim();
+  if (p) state.proxyUrl = p;
   state.model = document.getElementById('settingsModel').value;
   state.systemPrompt = document.getElementById('settingsSystemPrompt').value;
-  const proxy = document.getElementById('settingsProxyUrl').value.trim();
-  if (proxy) state.proxyUrl = proxy;
   save();
   updateModelBadge();
   closeSettings();
 }
 
 function clearAllData() {
-  if (!confirm('This will delete all conversations and settings. Continue?')) return;
-  localStorage.removeItem('nim_state');
+  if (!confirm('Delete all conversations and settings?')) return;
+  localStorage.removeItem('nim_v3');
   location.reload();
 }
