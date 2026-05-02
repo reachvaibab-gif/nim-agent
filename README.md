@@ -6,7 +6,6 @@
 
 [![Model](https://img.shields.io/badge/Qwen3_Coder_480B_A35B_Instruct-76b900?style=flat-square&logo=nvidia&logoColor=white)](https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct)
 [![Engine](https://img.shields.io/badge/OpenClaude-CLI-white?style=flat-square)](https://www.npmjs.com/package/@gitlawb/openclaude)
-[![Free Credits](https://img.shields.io/badge/Free_Credits-1%2C000-76b900?style=flat-square)](https://build.nvidia.com)
 
 </div>
 
