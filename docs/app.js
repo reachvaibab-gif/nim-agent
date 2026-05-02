@@ -99,12 +99,13 @@ window.addEventListener('DOMContentLoaded', () => {
 // ── ONBOARDING ─────────────────────────────────────────────
 function onboardingSubmit() {
   const key = document.getElementById('apiKeyInput').value.trim();
-  const proxy = document.getElementById('proxyUrlInput').value.trim();
+  const proxyEl = document.getElementById('proxyUrlInput');
+  const proxy = proxyEl ? proxyEl.value.trim() : '';
   if (!key.startsWith('nvapi-')) {
     showInputError('apiKeyInput', 'Key must start with nvapi-');
     return;
   }
-  if (!proxy) {
+  if (proxyEl && !proxy) {
     showInputError('proxyUrlInput', 'Proxy URL is required — see instructions');
     return;
   }
