@@ -1,677 +1,1233 @@
-/* ── app.js v4 — NIM Chat ────────────────────────────────────
-   Features: streaming (smart scroll), markdown, conversations,
-   delete/temp chats, project mode (file tree + ZIP download)
-──────────────────────────────────────────────────────────── */
+/* NIM Chat app controller */
 
-function getNimEndpoint() {
-  return state.proxyUrl || 'https://integrate.api.nvidia.com/v1/chat/completions';
-}
+const STORAGE_KEY = "nim_chat_v6";
+const SESSION_KEY = "nim_session_v1";
+const DEFAULT_MODEL = "qwen/qwen3-coder-480b-a35b-instruct";
+const CONTEXT_LIMIT = 50000;
+const MAX_ATTACH_BYTES = 1024 * 1024;
 
-// ── STATE ──────────────────────────────────────────────────
+const MODEL_LABELS = {
+  "qwen/qwen3-coder-480b-a35b-instruct": "Qwen3 Coder 480B",
+  "meta/llama-3.1-405b-instruct": "Llama 3.1 405B",
+  "nvidia/llama-3.1-nemotron-ultra-253b-v1": "Nemotron Ultra 253B",
+  "mistralai/mistral-large-2-instruct": "Mistral Large 2",
+};
+
+const BASE_SYSTEM_PROMPT = "You are NIM Chat, a precise engineering assistant. Be direct, complete, and careful. When code is useful, provide working code and explain the tradeoffs briefly.";
+const PROJECT_PROMPT = `${BASE_SYSTEM_PROMPT}
+
+When creating a full project, output complete files using this exact format:
+
+**path/to/file.ext**
+\`\`\`language
+file contents
+\`\`\`
+
+Include package files, README, configuration, source, and tests when appropriate.`;
+
+const ARTIFACT_PROMPT = `When the user asks for a UI, document, runnable HTML, component, chart, long code file, or full project artifact, provide a concise chat answer and then include one or more artifacts. Use this format:
+
+<artifact type="html|code|markdown|project" title="Short title" language="optional">
+artifact content here
+</artifact>
+
+HTML artifacts must be complete standalone HTML documents when previewable.`;
+
 let state = {
-  apiKey: '',
-  model: 'qwen/qwen3-coder-480b-a35b-instruct',
-  systemPrompt: 'You are a helpful, accurate, and thoughtful AI assistant.',
-  proxyUrl: '',
+  apiBase: "",
+  token: "",
+  role: "",
+  expiresAt: 0,
+  model: DEFAULT_MODEL,
+  systemPrompt: BASE_SYSTEM_PROMPT,
   conversations: {},
-  activeId: null,
+  activeId: "",
   generating: false,
   abortController: null,
   projectMode: false,
+  attachments: [],
   currentFiles: [],
 };
 
 let autoScroll = true;
+let pendingDeleteId = "";
 
-let pendingDeleteId = null;
+window.addEventListener("DOMContentLoaded", init);
 
-// ── STORAGE ────────────────────────────────────────────────
-function save() {
-  // Exclude temporary chats from persistence
-  const savedConvs = {};
-  for (const [id, conv] of Object.entries(state.conversations)) {
-    if (!conv.temp) savedConvs[id] = conv;
+function init() {
+  configureMarkdown();
+  loadLocalState();
+  loadSession();
+  bindEvents();
+  exposeAppApi();
+
+  if (window.NIMArtifacts) window.NIMArtifacts.init({ getState: () => state, toast, renderMarkdown, escHtml });
+  if (window.NIMAdmin) window.NIMAdmin.init(window.NIMApp);
+
+  if (hasValidSession()) showApp();
+  else showGate();
+}
+
+function configureMarkdown() {
+  if (!window.marked) return;
+  marked.setOptions({ breaks: true, gfm: true, mangle: false, headerIds: false });
+}
+
+function bindEvents() {
+  on("gateBtn", "click", authenticate);
+  on("gatePassword", "keydown", (event) => {
+    if (event.key === "Enter") authenticate();
+  });
+  on("gateProxy", "keydown", (event) => {
+    if (event.key === "Enter") authenticate();
+  });
+
+  on("newChatBtn", "click", () => newChat());
+  on("tempChatBtn", "click", () => newTempChat());
+  on("sidebarToggle", "click", toggleSidebar);
+  on("searchBtn", "click", openSearch);
+
+  on("settingsBtn", "click", openSettings);
+  on("settingsClose", "click", closeSettings);
+  on("saveSettingsBtn", "click", saveSettings);
+  on("clearDataBtn", "click", clearAllData);
+  on("settingsModal", "click", (event) => {
+    if (event.target === $("settingsModal")) closeSettings();
+  });
+
+  on("deleteCancelBtn", "click", closeDeleteModal);
+  on("deleteConfirmBtn", "click", confirmDelete);
+  on("stopBtn", "click", stopGeneration);
+  on("projectModeBtn", "click", toggleProjectMode);
+
+  on("attachBtn", "click", () => $("fileInput")?.click());
+  on("fileInput", "change", (event) => handleFiles(event.target.files));
+  on("downloadAllBtn", "click", downloadZip);
+  on("closeFilePanelBtn", "click", closeFilePanel);
+  on("filePreviewClose", "click", closeFilePreview);
+  on("previewDlBtn", "click", downloadPreviewedFile);
+  on("filePreviewModal", "click", (event) => {
+    if (event.target === $("filePreviewModal")) closeFilePreview();
+  });
+
+  const messagesContainer = $("messagesContainer");
+  if (messagesContainer) {
+    messagesContainer.addEventListener("scroll", () => {
+      autoScroll = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 96;
+    });
   }
-  localStorage.setItem('nim_v3', JSON.stringify({
-    apiKey: state.apiKey,
-    model: state.model,
-    systemPrompt: state.systemPrompt,
-    proxyUrl: state.proxyUrl,
-    conversations: savedConvs,
-    activeId: state.conversations[state.activeId]?.temp ? null : state.activeId,
-  }));
-}
 
-function load() {
-  try {
-    const raw = localStorage.getItem('nim_v3');
-    if (!raw) return false;
-    const data = JSON.parse(raw);
-    Object.assign(state, data);
-    return !!state.apiKey;
-  } catch { return false; }
-}
-
-// ── INIT ───────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', () => {
-  const hasKey = load();
-
-  marked.setOptions({ breaks: true, gfm: true });
-
-  // Onboarding
-  document.getElementById('startBtn').addEventListener('click', onboardingSubmit);
-  document.getElementById('apiKeyInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') onboardingSubmit();
-  });
-
-  // Sidebar
-  document.getElementById('newChatBtn').addEventListener('click', () => newChat());
-  document.getElementById('tempChatBtn').addEventListener('click', () => newTempChat());
-  document.getElementById('sidebarToggle').addEventListener('click', toggleSidebar);
-
-  // Settings
-  document.getElementById('settingsBtn').addEventListener('click', openSettings);
-  document.getElementById('settingsClose').addEventListener('click', closeSettings);
-  document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
-  document.getElementById('clearDataBtn').addEventListener('click', clearAllData);
-  document.getElementById('settingsModal').addEventListener('click', e => {
-    if (e.target === document.getElementById('settingsModal')) closeSettings();
-  });
-
-  // Delete confirm
-  document.getElementById('deleteCancelBtn').addEventListener('click', () => {
-    pendingDeleteId = null;
-    document.getElementById('deleteModal').classList.add('hidden');
-  });
-  document.getElementById('deleteConfirmBtn').addEventListener('click', confirmDelete);
-
-  // Stop
-  document.getElementById('stopBtn').addEventListener('click', stopGeneration);
-
-  // Project mode toggle
-  document.getElementById('projectModeBtn').addEventListener('click', toggleProjectMode);
-
-  // File panel buttons
-  document.getElementById('downloadAllBtn').addEventListener('click', downloadZip);
-  document.getElementById('closeFilePanelBtn').addEventListener('click', () => {
-    document.getElementById('filePanel').classList.add('hidden');
-    document.getElementById('app').classList.remove('has-files');
-  });
-  document.getElementById('filePreviewClose').addEventListener('click', closeFilePreview);
-  document.getElementById('filePreviewModal').addEventListener('click', e => {
-    if (e.target === document.getElementById('filePreviewModal')) closeFilePreview();
-  });
-
-  // Smart scroll: stop auto-scrolling when user scrolls up
-  document.getElementById('messagesContainer').addEventListener('scroll', () => {
-    const c = document.getElementById('messagesContainer');
-    autoScroll = c.scrollHeight - c.scrollTop - c.clientHeight < 80;
-  });
-
-  // Send
-  document.getElementById('sendBtn').addEventListener('click', sendMessage);
-  const input = document.getElementById('messageInput');
-  input.addEventListener('input', () => { autoResize(input); updateSendBtn(); });
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (!document.getElementById('sendBtn').disabled) sendMessage();
-    }
-  });
-
-  // Suggestion chips
-  document.querySelectorAll('.chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      input.value = btn.dataset.msg;
+  on("sendBtn", "click", sendMessage);
+  const input = $("messageInput");
+  if (input) {
+    input.addEventListener("input", () => {
       autoResize(input);
-      updateSendBtn();
-      input.focus();
+      updateSendButton();
+      updateContextRing();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        if (!$("sendBtn").disabled) sendMessage();
+      }
+    });
+  }
+
+  document.querySelectorAll(".chip").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = $("messageInput");
+      target.value = button.dataset.msg || "";
+      autoResize(target);
+      updateSendButton();
+      updateContextRing();
+      target.focus();
     });
   });
 
-  if (hasKey) {
-    showApp();
-  }
-});
+  on("searchOverlay", "click", (event) => {
+    if (event.target === $("searchOverlay")) closeSearch();
+  });
+  on("searchInput", "input", renderSearchResults);
 
-// ── ONBOARDING ─────────────────────────────────────────────
-function onboardingSubmit() {
-  const key = document.getElementById('apiKeyInput').value.trim();
-  const proxyEl = document.getElementById('proxyUrlInput');
-  const proxy = proxyEl ? proxyEl.value.trim() : '';
-
-  if (!key.startsWith('nvapi-')) {
-    flashError('apiKeyInput', 'Key must start with nvapi-');
-    return;
-  }
-  if (proxyEl && !proxy) {
-    flashError('proxyUrlInput', 'Required — see proxy setup instructions');
-    return;
-  }
-  state.apiKey = key;
-  state.model = document.getElementById('modelSelect').value;
-  state.proxyUrl = proxy;
-  save();
-  showApp();
+  document.addEventListener("keydown", handleShortcuts);
 }
 
-function flashError(id, msg) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  const orig = el.placeholder;
-  el.style.borderColor = '#e53e3e';
-  el.placeholder = msg;
-  setTimeout(() => { el.style.borderColor = ''; el.placeholder = orig; }, 2500);
+function on(id, type, handler) {
+  const element = $(id);
+  if (element) element.addEventListener(type, handler);
+}
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function exposeAppApi() {
+  window.NIMApp = {
+    state,
+    api,
+    authHeaders,
+    saveLocalState,
+    saveRemoteConversation,
+    renderMarkdown,
+    escHtml,
+    toast,
+    modelLabel,
+    createChatMessage,
+    sendStandalonePrompt,
+    getActiveConversation: () => state.conversations[state.activeId],
+    renderFilePanel,
+    parseGeneratedFiles,
+    showApp,
+    showGate,
+    logout,
+  };
+}
+
+function loadLocalState() {
+  const data = safeParse(localStorage.getItem(STORAGE_KEY), {});
+  state.apiBase = data.apiBase || localStorage.getItem("nim_worker_url") || "";
+  state.model = data.model || DEFAULT_MODEL;
+  state.systemPrompt = data.systemPrompt || BASE_SYSTEM_PROMPT;
+  state.conversations = data.conversations || {};
+  state.activeId = data.activeId || "";
+  state.projectMode = Boolean(data.projectMode);
+}
+
+function loadSession() {
+  const session = safeParse(sessionStorage.getItem(SESSION_KEY), null) || safeParse(localStorage.getItem(SESSION_KEY), null);
+  if (!session) return;
+  state.token = session.token || "";
+  state.role = session.role || "";
+  state.expiresAt = Number(session.expiresAt) || 0;
+}
+
+function saveLocalState() {
+  const conversations = {};
+  for (const [id, conversation] of Object.entries(state.conversations)) {
+    if (!conversation.temp) conversations[id] = conversation;
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    apiBase: state.apiBase,
+    model: state.model,
+    systemPrompt: state.systemPrompt,
+    conversations,
+    activeId: state.conversations[state.activeId]?.temp ? "" : state.activeId,
+    projectMode: state.projectMode,
+  }));
+  if (state.apiBase) localStorage.setItem("nim_worker_url", state.apiBase);
+}
+
+function saveSession() {
+  const payload = JSON.stringify({ token: state.token, role: state.role, expiresAt: state.expiresAt });
+  localStorage.setItem(SESSION_KEY, payload);
+  sessionStorage.setItem(SESSION_KEY, payload);
+}
+
+function clearSession() {
+  state.token = "";
+  state.role = "";
+  state.expiresAt = 0;
+  localStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(SESSION_KEY);
+}
+
+function hasValidSession() {
+  return Boolean(state.token && state.expiresAt && Date.now() < state.expiresAt);
+}
+
+async function authenticate() {
+  const password = $("gatePassword")?.value || "";
+  const proxy = $("gateProxy")?.value.trim() || state.apiBase || "";
+  const button = $("gateBtn");
+  hideGateError();
+
+  if (!password) return showGateError("Enter the access password.");
+  state.apiBase = normalizeApiBase(proxy);
+  saveLocalState();
+
+  setBusy(button, true, "Checking...");
+  try {
+    const response = await api("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    }, false);
+    if (!response.ok) throw await responseError(response);
+
+    const data = await response.json();
+    state.token = data.token;
+    state.role = data.role;
+    state.expiresAt = data.expiresAt;
+    saveSession();
+    $("gatePassword").value = "";
+    showApp();
+  } catch (error) {
+    showGateError(error.message || "Could not authenticate. Check the password and Worker URL.");
+  } finally {
+    setBusy(button, false, "Continue");
+  }
+}
+
+function showGate() {
+  $("gate")?.classList.remove("hidden");
+  $("app")?.classList.add("hidden");
+  $("adminFab")?.classList.add("hidden");
+  $("gateProxy") && ($("gateProxy").value = state.apiBase);
+  setTimeout(() => $("gatePassword")?.focus(), 50);
 }
 
 function showApp() {
-  document.getElementById('onboarding').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
+  $("gate")?.classList.add("hidden");
+  $("app")?.classList.remove("hidden");
+  document.body.classList.toggle("admin-session", state.role === "admin");
+  $("adminFab")?.classList.toggle("hidden", state.role !== "admin");
+
   updateModelBadge();
+  updateTempBadge();
+  updateProjectButton();
   renderSidebar();
-  if (state.activeId && state.conversations[state.activeId]) {
-    renderMessages();
-  } else {
-    newChat();
-  }
-  document.getElementById('messageInput').focus();
+  if (state.activeId && state.conversations[state.activeId]) renderMessages();
+  else newChat();
+  updateContextRing();
+  $("messageInput")?.focus();
 }
 
-// ── CONVERSATIONS ──────────────────────────────────────────
+function logout() {
+  clearSession();
+  showGate();
+}
+
+function showGateError(message) {
+  const error = $("gateError");
+  if (!error) return;
+  error.textContent = message;
+  error.classList.remove("hidden");
+}
+
+function hideGateError() {
+  $("gateError")?.classList.add("hidden");
+}
+
+function setBusy(button, busy, label) {
+  if (!button) return;
+  button.disabled = busy;
+  button.textContent = label;
+}
+
+function normalizeApiBase(value) {
+  const text = String(value || "").trim().replace(/\/+$/, "");
+  return text;
+}
+
+function api(path, options = {}, includeSession = true) {
+  const base = state.apiBase || "";
+  const url = base ? `${base}${path}` : path;
+  const headers = new Headers(options.headers || {});
+  if (includeSession && state.token) headers.set("X-Session", state.token);
+  return fetch(url, { ...options, headers });
+}
+
+function authHeaders(extra = {}) {
+  return { ...extra, "X-Session": state.token };
+}
+
+async function responseError(response) {
+  const data = await response.json().catch(() => ({}));
+  return new Error(data.error || data.message || `HTTP ${response.status}`);
+}
+
 function newChat() {
   const id = `c_${Date.now()}`;
-  state.conversations[id] = { title: 'New chat', messages: [], temp: false };
+  state.conversations[id] = {
+    id,
+    title: "New chat",
+    messages: [],
+    temp: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
   state.activeId = id;
-  save();
+  state.attachments = [];
+  saveLocalState();
   renderSidebar();
   renderMessages();
-  document.getElementById('messageInput').focus();
+  renderAttachments();
+  closeFilePanel();
+  $("messageInput")?.focus();
 }
 
 function newTempChat() {
   const id = `t_${Date.now()}`;
-  state.conversations[id] = { title: '⚡ Temporary', messages: [], temp: true };
+  state.conversations[id] = {
+    id,
+    title: "Temporary chat",
+    messages: [],
+    temp: true,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
   state.activeId = id;
+  state.attachments = [];
   renderSidebar();
   renderMessages();
+  renderAttachments();
   updateTempBadge();
-  document.getElementById('messageInput').focus();
+  $("messageInput")?.focus();
 }
 
 function selectConversation(id) {
+  if (!state.conversations[id]) return;
   state.activeId = id;
-  save();
+  state.attachments = [];
+  saveLocalState();
   renderSidebar();
   renderMessages();
-  updateTempBadge();
+  renderAttachments();
+  updateContextRing();
 }
 
-function deleteConversation(id, e) {
-  e.stopPropagation();
+function deleteConversation(id, event) {
+  event?.stopPropagation();
   pendingDeleteId = id;
-  document.getElementById('deleteModal').classList.remove('hidden');
+  $("deleteModal")?.classList.remove("hidden");
+}
+
+function closeDeleteModal() {
+  pendingDeleteId = "";
+  $("deleteModal")?.classList.add("hidden");
 }
 
 function confirmDelete() {
   if (!pendingDeleteId) return;
   const wasActive = pendingDeleteId === state.activeId;
   delete state.conversations[pendingDeleteId];
-  pendingDeleteId = null;
-  document.getElementById('deleteModal').classList.add('hidden');
-
+  closeDeleteModal();
   if (wasActive) {
     const ids = Object.keys(state.conversations);
-    state.activeId = ids.length ? ids[ids.length - 1] : null;
-    if (!state.activeId) newChat(); else renderMessages();
+    state.activeId = ids[ids.length - 1] || "";
+    if (!state.activeId) newChat();
+    else renderMessages();
   }
-  save();
+  saveLocalState();
   renderSidebar();
 }
 
-// ── SIDEBAR RENDER ─────────────────────────────────────────
 function renderSidebar() {
-  const list = document.getElementById('conversationList');
-  const all = Object.entries(state.conversations).reverse();
+  const list = $("conversationList");
+  if (!list) return;
+  const entries = Object.entries(state.conversations)
+    .sort(([, a], [, b]) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
 
-  if (all.length === 0) {
-    list.innerHTML = `<div style="padding:12px 10px;font-size:12px;color:var(--faint)">No conversations yet</div>`;
+  if (!entries.length) {
+    list.innerHTML = `<div class="sidebar-empty">No conversations yet</div>`;
     return;
   }
 
-  // Group by: temporary, today, yesterday, older
-  const temp = all.filter(([, c]) => c.temp);
-  const saved = all.filter(([, c]) => !c.temp);
+  const groups = groupConversations(entries);
+  list.innerHTML = Object.entries(groups).map(([label, items]) => {
+    if (!items.length) return "";
+    return `<div class="conv-group-label">${label}</div>${items.map(([id, conversation]) => conversationRow(id, conversation)).join("")}`;
+  }).join("");
+}
 
+function groupConversations(entries) {
   const now = Date.now();
-  const today = saved.filter(([id]) => now - idTs(id) < 86400000);
-  const yesterday = saved.filter(([id]) => {
-    const age = now - idTs(id);
-    return age >= 86400000 && age < 172800000;
-  });
-  const older = saved.filter(([id]) => now - idTs(id) >= 172800000);
-
-  let html = '';
-  if (temp.length) {
-    html += group('Temporary', temp);
+  const groups = { Pinned: [], Today: [], Yesterday: [], Older: [] };
+  for (const item of entries) {
+    const [, conversation] = item;
+    if (conversation.temp) groups.Pinned.push(item);
+    else {
+      const age = now - (conversation.updatedAt || conversation.createdAt || now);
+      if (age < 86400000) groups.Today.push(item);
+      else if (age < 172800000) groups.Yesterday.push(item);
+      else groups.Older.push(item);
+    }
   }
-  if (today.length) html += group('Today', today);
-  if (yesterday.length) html += group('Yesterday', yesterday);
-  if (older.length) html += group('Older', older);
-
-  list.innerHTML = html;
+  return groups;
 }
 
-function idTs(id) {
-  const n = parseInt(id.split('_')[1]);
-  return isNaN(n) ? 0 : n;
+function conversationRow(id, conversation) {
+  const active = id === state.activeId ? "active" : "";
+  const icon = conversation.temp ? "bolt" : "chat";
+  return `
+    <button class="conv-item ${active}" data-id="${escHtml(id)}" onclick="selectConversation('${escAttr(id)}')">
+      <span class="conv-icon ${icon}">${conversation.temp ? "!" : "#"}</span>
+      <span class="conv-item-text">${escHtml(conversation.title || "Untitled")}</span>
+      <span class="conv-age">${relativeTime(conversation.updatedAt || conversation.createdAt)}</span>
+      <span class="conv-delete" onclick="deleteConversation('${escAttr(id)}',event)" title="Delete">x</span>
+    </button>`;
 }
 
-function group(label, items) {
-  return `<div class="conv-group-label">${label}</div>` +
-    items.map(([id, conv]) => {
-      const active = id === state.activeId ? 'active' : '';
-      return `
-        <div class="conv-item ${active}" onclick="selectConversation('${id}')">
-          ${conv.temp ? `<div class="conv-temp-dot"></div>` : ''}
-          <span class="conv-item-text">${escHtml(conv.title)}</span>
-          <button class="conv-delete" onclick="deleteConversation('${id}',event)" title="Delete">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>`;
-    }).join('');
-}
-
-// ── RENDER MESSAGES ────────────────────────────────────────
 function renderMessages() {
-  const container = document.getElementById('messages');
-  const emptyState = document.getElementById('emptyState');
-  const conv = state.conversations[state.activeId];
+  const container = $("messages");
+  if (!container) return;
+  const conversation = state.conversations[state.activeId];
   updateTempBadge();
+  updateContextRing();
 
-  if (!conv || conv.messages.length === 0) {
-    container.innerHTML = '';
-    container.appendChild(emptyState);
-    emptyState.classList.remove('hidden');
-    document.getElementById('emptyModelName').textContent = modelLabel(state.model);
+  if (!conversation || !conversation.messages.length) {
+    container.innerHTML = emptyStateHtml();
+    bindSuggestionChips();
     return;
   }
 
-  emptyState.classList.add('hidden');
-  container.innerHTML = conv.messages.map((m, i) => buildMsgHTML(m, i)).join('');
-  container.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
-  scrollToBottom();
+  container.innerHTML = conversation.messages.map((message, index) => buildMessageHtml(message, index)).join("");
+  highlightCode(container);
+  scrollToBottom(true);
 }
 
-function buildMsgHTML(msg, i) {
-  if (msg.role === 'user') {
-    return `<div class="message user" id="msg_${i}">
-      <div class="msg-avatar">U</div>
-      <div class="msg-content">${escHtml(msg.content)}</div>
+function emptyStateHtml() {
+  return `
+    <div class="empty-state" id="emptyState">
+      <div class="empty-logo">
+        <svg width="48" height="48" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#76b900"/><path d="M10 28L20 12L30 28H10Z" fill="white"/></svg>
+      </div>
+      <h2>How can I help?</h2>
+      <p id="emptyModel">${escHtml(modelLabel(state.model))}</p>
+      <div class="chips">
+        <button class="chip" data-msg="Write a complete REST API in Node.js with Express and JWT auth">Build a REST API</button>
+        <button class="chip" data-msg="Create a polished HTML dashboard artifact with charts and filters">Create an artifact</button>
+        <button class="chip" data-msg="Create a full React project with routing, auth, tests, and README">Full project</button>
+        <button class="chip" data-msg="Debug this code and explain what's wrong: ">Debug my code</button>
+      </div>
     </div>`;
+}
+
+function bindSuggestionChips() {
+  document.querySelectorAll(".chip").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = $("messageInput");
+      input.value = button.dataset.msg || "";
+      autoResize(input);
+      updateSendButton();
+      updateContextRing();
+      input.focus();
+    });
+  });
+}
+
+function buildMessageHtml(message, index) {
+  if (message.role === "user") {
+    return `
+      <article class="message user" id="msg_${index}">
+        <div class="msg-avatar user-avatar">U</div>
+        <div class="msg-content">${renderUserContent(message.content)}</div>
+      </article>`;
   }
-  return `<div class="message assistant" id="msg_${i}">
-    <div class="msg-avatar">
-      <svg width="16" height="16" viewBox="0 0 40 40" fill="none">
-        <rect width="40" height="40" rx="8" fill="#76b900"/>
-        <path d="M10 28L20 12L30 28H10Z" fill="white"/>
-      </svg>
-    </div>
-    <div class="msg-content">${renderMarkdown(msg.content)}</div>
-  </div>`;
+
+  const artifacts = window.NIMArtifacts ? window.NIMArtifacts.extract(message.content) : [];
+  const artifactButtons = artifacts.length ? `
+    <div class="msg-artifacts">
+      ${artifacts.map((artifact, artifactIndex) => `
+        <button class="artifact-chip" onclick="openArtifactFromMessage(${index},${artifactIndex})">
+          <span>${escHtml(artifact.type.toUpperCase())}</span>${escHtml(artifact.title)}
+        </button>`).join("")}
+    </div>` : "";
+
+  return `
+    <article class="message assistant" id="msg_${index}">
+      <div class="msg-avatar nim-avatar">
+        <svg width="16" height="16" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="8" fill="#76b900"/><path d="M10 28L20 12L30 28H10Z" fill="white"/></svg>
+      </div>
+      <div class="msg-shell">
+        <div class="msg-meta">${message.thoughtTime ? `Thought for ${escHtml(message.thoughtTime)}` : ""}</div>
+        <div class="msg-content">${renderMarkdown(stripArtifactBlocks(message.content))}</div>
+        ${artifactButtons}
+      </div>
+    </article>`;
+}
+
+function renderUserContent(content) {
+  return escHtml(content).replace(/\n/g, "<br>");
 }
 
 function renderMarkdown(text) {
-  let html = marked.parse(text || '');
-  html = html.replace(/<pre><code class="language-(\w+)">/g, (_, lang) =>
-    `<pre><div class="code-header"><span class="code-lang">${escHtml(lang)}</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code class="language-${escHtml(lang)}">`
-  );
-  html = html.replace(/<pre><code(?! class)>/g,
-    `<pre><div class="code-header"><span class="code-lang">code</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code>`
-  );
-  return html;
+  if (!window.marked) return renderUserContent(text);
+  const html = marked.parse(text || "");
+  return hardenHtml(html)
+    .replace(/<pre><code class="language-([^"]+)">/g, (_, lang) => {
+      return `<pre><div class="code-header"><span class="code-lang">${escHtml(lang)}</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code class="language-${escAttr(lang)}">`;
+    })
+    .replace(/<pre><code>/g, `<pre><div class="code-header"><span class="code-lang">code</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code>`);
 }
 
-// ── SEND MESSAGE ───────────────────────────────────────────
+function hardenHtml(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son\w+="[^"]*"/gi, "")
+    .replace(/\son\w+='[^']*'/gi, "")
+    .replace(/href=["']javascript:[^"']*["']/gi, "href=\"#\"");
+}
+
+function stripArtifactBlocks(text) {
+  return String(text || "").replace(/<artifact\b[^>]*>[\s\S]*?<\/artifact>/gi, "\n\n");
+}
+
 async function sendMessage() {
   if (state.generating) return;
-  const input = document.getElementById('messageInput');
-  const text = input.value.trim();
-  if (!text) return;
-
-  input.value = '';
-  autoResize(input);
-  updateSendBtn();
-  document.getElementById('emptyState').classList.add('hidden');
-
-  const conv = state.conversations[state.activeId];
-  conv.messages.push({ role: 'user', content: text });
-
-  if (conv.messages.length === 1 && conv.title === 'New chat') {
-    conv.title = text.slice(0, 40) + (text.length > 40 ? '…' : '');
-    renderSidebar();
+  if (!hasValidSession()) {
+    clearSession();
+    showGate();
+    return;
   }
 
-  appendMsgDOM({ role: 'user', content: text }, conv.messages.length - 1);
+  const input = $("messageInput");
+  const rawText = input.value.trim();
+  if (!rawText && !state.attachments.length) return;
 
-  const assistantIdx = conv.messages.length;
-  conv.messages.push({ role: 'assistant', content: '' });
-  const assistantEl = appendMsgDOM({ role: 'assistant', content: '' }, assistantIdx);
-  assistantEl.querySelector('.msg-content').classList.add('typing-cursor');
+  const text = buildUserMessage(rawText);
+  input.value = "";
+  autoResize(input);
+  updateSendButton();
 
-  autoScroll = true;
-  scrollToBottom(true);
+  const conversation = ensureActiveConversation();
+  const userMessage = createChatMessage("user", text);
+  conversation.messages.push(userMessage);
+  conversation.updatedAt = Date.now();
+
+  if (conversation.title === "New chat" || conversation.title === "Temporary chat") {
+    conversation.title = titleFromMessage(rawText || state.attachments[0]?.name || "Attached files");
+  }
+
+  state.attachments = [];
+  renderAttachments();
+  renderSidebar();
+  appendMessage(userMessage, conversation.messages.length - 1);
+
+  const assistantIndex = conversation.messages.length;
+  const assistantMessage = createChatMessage("assistant", "");
+  conversation.messages.push(assistantMessage);
+  const assistantEl = appendMessage(assistantMessage, assistantIndex);
+  assistantEl.querySelector(".msg-content")?.classList.add("typing-cursor");
 
   state.generating = true;
   state.abortController = new AbortController();
-  document.getElementById('stopBtn').classList.remove('hidden');
-  document.getElementById('sendBtn').disabled = true;
+  $("stopBtn")?.classList.remove("hidden");
+  updateSendButton();
+  autoScroll = true;
+  scrollToBottom(true);
 
+  const started = performance.now();
   try {
-    const response = await fetch(getNimEndpoint(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${state.apiKey}`,
-      },
+    const response = await api("/api/proxy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       signal: state.abortController.signal,
       body: JSON.stringify({
         model: state.model,
-        messages: buildMessages(conv.messages.slice(0, -1)),
+        messages: buildMessages(conversation.messages.slice(0, -1)),
         stream: true,
-        max_tokens: state.projectMode ? 16384 : 4096,
-        temperature: 0.6,
+        max_tokens: state.projectMode ? 16384 : 8192,
+        temperature: 0.55,
       }),
     });
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err?.detail || err?.message || `HTTP ${response.status}`);
-    }
-
-    await streamResponse(response, assistantEl, conv, assistantIdx);
-
-  } catch (err) {
-    if (err.name !== 'AbortError') {
-      const isCors = err.message.toLowerCase().includes('fetch') ||
-                     err.message.toLowerCase().includes('failed') ||
-                     err.message.toLowerCase().includes('network');
-      const msg = isCors
-        ? '⚠️ CORS / Network Error\n\nCheck your Proxy URL in Settings.'
-        : `⚠️ Error: ${err.message}`;
-      conv.messages[assistantIdx].content = msg;
-      assistantEl.querySelector('.msg-content').textContent = msg;
+    if (!response.ok) throw await responseError(response);
+    await streamResponse(response, assistantEl, conversation, assistantIndex);
+    assistantMessage.thoughtTime = `${Math.max(0.4, (performance.now() - started) / 1000).toFixed(1)}s`;
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      assistantMessage.content = `Error: ${error.message || "Generation failed"}`;
+      assistantEl.querySelector(".msg-content").textContent = assistantMessage.content;
+      toast(assistantMessage.content, "error");
+      if (/Unauthorized/i.test(error.message)) {
+        clearSession();
+        showGate();
+      }
     }
   } finally {
     finishGeneration(assistantEl);
-    if (!conv.temp) save();
-    // After stream ends, parse project files if in project mode
-    if (state.projectMode) {
-      const lastMsg = conv.messages[conv.messages.length - 1];
-      if (lastMsg?.role === 'assistant') parseAndShowFiles(lastMsg.content);
+    conversation.updatedAt = Date.now();
+    renderMessages();
+    if (!conversation.temp) {
+      saveLocalState();
+      saveRemoteConversation(conversation).catch(() => {});
     }
+    const latest = conversation.messages[conversation.messages.length - 1]?.content || "";
+    const files = parseGeneratedFiles(latest);
+    if (files.length) renderFilePanel(files);
+    if (window.NIMArtifacts) window.NIMArtifacts.autoOpen(latest);
   }
 }
 
-const PROJECT_PROMPT = `You are an expert software engineer. When creating a project, output EVERY file using this exact format — no exceptions:
-
-**path/to/filename.ext**
-\`\`\`language
-file contents here
-\`\`\`
-
-Include package.json, README.md, config files, and all source files. Write complete, production-ready code.`;
-
-function buildMessages(msgs) {
-  const out = [];
-  const sys = state.projectMode ? PROJECT_PROMPT : state.systemPrompt;
-  if (sys) out.push({ role: 'system', content: sys });
-  out.push(...msgs.map(m => ({ role: m.role, content: m.content })));
-  return out;
+function ensureActiveConversation() {
+  if (!state.activeId || !state.conversations[state.activeId]) newChat();
+  return state.conversations[state.activeId];
 }
 
-async function streamResponse(response, el, conv, idx) {
-  const reader = response.body.getReader();
+function createChatMessage(role, content) {
+  return { role, content, createdAt: Date.now() };
+}
+
+function buildUserMessage(text) {
+  if (!state.attachments.length) return text;
+  const attachmentText = state.attachments.map((file) => {
+    const body = file.content ? `\n\n\`\`\`${file.language || ""}\n${file.content}\n\`\`\`` : "";
+    return `Attached file: ${file.name} (${formatBytes(file.size)}, ${file.type || "unknown"})${body}`;
+  }).join("\n\n");
+  return `${text || "Use the attached files."}\n\n${attachmentText}`;
+}
+
+function buildMessages(messages) {
+  const inputPreview = $("messageInput")?.value || "";
+  const system = [
+    state.projectMode ? PROJECT_PROMPT : state.systemPrompt || BASE_SYSTEM_PROMPT,
+    ARTIFACT_PROMPT,
+  ].filter(Boolean).join("\n\n");
+
+  const packed = [];
+  let budget = CONTEXT_LIMIT - estimateTokens(system) - estimateTokens(inputPreview) - 500;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    const cost = estimateTokens(message.content) + 8;
+    if (cost > budget && packed.length > 6) break;
+    packed.unshift({ role: message.role, content: message.content });
+    budget -= cost;
+  }
+
+  if (packed.length < messages.length) {
+    packed.unshift({
+      role: "system",
+      content: `${messages.length - packed.length} older messages were omitted to preserve useful context. Continue using the visible recent conversation and ask for missing details if needed.`,
+    });
+  }
+  packed.unshift({ role: "system", content: system });
+  return packed;
+}
+
+async function streamResponse(response, element, conversation, index) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content || "";
+    conversation.messages[index].content = content;
+    element.querySelector(".msg-content").innerHTML = renderMarkdown(stripArtifactBlocks(content));
+    return;
+  }
+
   const decoder = new TextDecoder();
-  const contentEl = el.querySelector('.msg-content');
-  let buffer = '';
-  let full = '';
+  let buffer = "";
+  let full = "";
+  const contentEl = element.querySelector(".msg-content");
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop();
-
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
     for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
-      if (data === '[DONE]') return;
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") return;
       try {
-        const delta = JSON.parse(data)?.choices?.[0]?.delta?.content;
-        if (delta) {
-          full += delta;
-          conv.messages[idx].content = full;
-          contentEl.innerHTML = renderMarkdown(full);
-          contentEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
-          scrollToBottom(); // respects autoScroll flag
-        }
-      } catch { /* ignore */ }
+        const parsed = JSON.parse(data);
+        const delta = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.text || "";
+        if (!delta) continue;
+        full += delta;
+        conversation.messages[index].content = full;
+        contentEl.innerHTML = renderMarkdown(stripArtifactBlocks(full));
+        highlightCode(contentEl);
+        scrollToBottom();
+      } catch {
+        // Some providers emit heartbeat or non-JSON lines.
+      }
     }
   }
 }
 
-function finishGeneration(el) {
+function finishGeneration(element) {
   state.generating = false;
   state.abortController = null;
-  el.querySelector('.msg-content').classList.remove('typing-cursor');
-  document.getElementById('stopBtn').classList.add('hidden');
-  updateSendBtn();
+  element?.querySelector(".msg-content")?.classList.remove("typing-cursor");
+  $("stopBtn")?.classList.add("hidden");
+  updateSendButton();
+  updateContextRing();
 }
 
 function stopGeneration() {
   if (state.abortController) state.abortController.abort();
 }
 
-// ── DOM HELPERS ────────────────────────────────────────────
-function appendMsgDOM(msg, idx) {
-  const messages = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.innerHTML = buildMsgHTML(msg, idx);
-  const el = div.firstElementChild;
-  messages.appendChild(el);
-  if (msg.role === 'assistant') {
-    el.querySelectorAll('pre code').forEach(e => hljs.highlightElement(e));
-  }
-  return el;
+function appendMessage(message, index) {
+  const container = $("messages");
+  if (!container) return null;
+  if ($("emptyState")) container.innerHTML = "";
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = buildMessageHtml(message, index);
+  const element = wrapper.firstElementChild;
+  container.appendChild(element);
+  highlightCode(element);
+  scrollToBottom();
+  return element;
+}
+
+function highlightCode(root = document) {
+  if (!window.hljs) return;
+  root.querySelectorAll("pre code").forEach((element) => {
+    if (!element.dataset.highlighted) hljs.highlightElement(element);
+  });
+}
+
+async function saveRemoteConversation(conversation) {
+  if (!state.token || conversation.temp) return;
+  const response = await api("/api/chat/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conversationId: conversation.id,
+      title: conversation.title,
+      model: state.model,
+      messages: conversation.messages,
+    }),
+  });
+  if (!response.ok) throw await responseError(response);
+}
+
+async function sendStandalonePrompt(messages, options = {}) {
+  const response = await api("/api/proxy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: options.signal,
+    body: JSON.stringify({
+      model: options.model || state.model,
+      messages,
+      stream: false,
+      max_tokens: options.maxTokens || 4096,
+      temperature: options.temperature ?? 0.55,
+    }),
+  });
+  if (!response.ok) throw await responseError(response);
+  const data = await response.json().catch(() => ({}));
+  return data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "";
+}
+
+function updateSendButton() {
+  const input = $("messageInput");
+  const hasText = Boolean(input?.value.trim());
+  const hasFiles = state.attachments.length > 0;
+  const button = $("sendBtn");
+  if (button) button.disabled = state.generating || (!hasText && !hasFiles);
+}
+
+function autoResize(textarea) {
+  if (!textarea) return;
+  textarea.style.height = "auto";
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
 }
 
 function scrollToBottom(force = false) {
   if (!force && !autoScroll) return;
-  const c = document.getElementById('messagesContainer');
-  c.scrollTop = c.scrollHeight;
-}
-
-function autoResize(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-}
-
-function updateSendBtn() {
-  const val = document.getElementById('messageInput').value.trim();
-  document.getElementById('sendBtn').disabled = !val || state.generating;
+  const container = $("messagesContainer");
+  if (container) container.scrollTop = container.scrollHeight;
 }
 
 function toggleSidebar() {
-  document.getElementById('sidebar').classList.toggle('collapsed');
+  $("sidebar")?.classList.toggle("collapsed");
 }
 
-// ── PROJECT MODE ───────────────────────────────────────────
 function toggleProjectMode() {
   state.projectMode = !state.projectMode;
-  const btn = document.getElementById('projectModeBtn');
-  btn.classList.toggle('active', state.projectMode);
-  btn.title = state.projectMode ? 'Project mode ON — click to disable' : 'Project mode — generate full codebases';
-  if (!state.projectMode) {
-    document.getElementById('filePanel').classList.add('hidden');
-    document.getElementById('app').classList.remove('has-files');
-  }
+  updateProjectButton();
+  updateContextRing();
+  saveLocalState();
+  toast(state.projectMode ? "Project mode enabled" : "Project mode disabled");
 }
 
-function parseFiles(text) {
-  const files = [];
-  const seen = new Set();
-  // Match **path/file.ext** followed by a code block
-  const re = /\*\*([^\*\n]+\.[A-Za-z0-9_]+)\*\*\s*\n```(?:[\w+-]*)\n([\s\S]*?)```/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const path = m[1].trim().replace(/^\/+/, '');
-    if (!seen.has(path)) { seen.add(path); files.push({ path, content: m[2] }); }
-  }
-  return files;
-}
-
-function parseAndShowFiles(text) {
-  const files = parseFiles(text);
-  if (!files.length) return;
-  state.currentFiles = files;
-  renderFilePanel(files);
-  document.getElementById('filePanel').classList.remove('hidden');
-  document.getElementById('app').classList.add('has-files');
-}
-
-function renderFilePanel(files) {
-  document.getElementById('fileCount').textContent = `${files.length} file${files.length !== 1 ? 's' : ''}`;
-  const list = document.getElementById('fileList');
-  list.innerHTML = files.map((f, i) => {
-    const parts = f.path.split('/');
-    const name = parts.pop();
-    const dir = parts.join('/');
-    const ext = name.split('.').pop();
-    return `<div class="file-item" onclick="previewFile(${i})">
-      <div class="file-item-icon">${fileIcon(ext)}</div>
-      <div class="file-item-info">
-        <div class="file-item-name">${escHtml(name)}</div>
-        ${dir ? `<div class="file-item-dir">${escHtml(dir)}</div>` : ''}
-      </div>
-      <button class="file-dl-btn" onclick="downloadFile(${i},event)" title="Download">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
-      </button>
-    </div>`;
-  }).join('');
-}
-
-function fileIcon(ext) {
-  const icons = { js:'JS', ts:'TS', py:'PY', html:'HTML', css:'CSS',
-    json:'{}', md:'MD', sh:'SH', yml:'YML', yaml:'YML', go:'GO',
-    rs:'RS', java:'JV', cpp:'C++', c:'C', rb:'RB', php:'PHP' };
-  return icons[ext.toLowerCase()] || ext.slice(0,3).toUpperCase();
-}
-
-function previewFile(i) {
-  const f = state.currentFiles[i];
-  document.getElementById('previewFilename').textContent = f.path;
-  const code = document.getElementById('previewCode');
-  code.textContent = f.content;
-  code.className = '';
-  hljs.highlightElement(code);
-  document.getElementById('previewDownloadBtn').onclick = () => downloadFile(i, null);
-  document.getElementById('filePreviewModal').classList.remove('hidden');
-}
-
-function closeFilePreview() {
-  document.getElementById('filePreviewModal').classList.add('hidden');
-}
-
-function downloadFile(i, e) {
-  if (e) e.stopPropagation();
-  const f = state.currentFiles[i];
-  const blob = new Blob([f.content], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = f.path.split('/').pop(); a.click();
-  URL.revokeObjectURL(url);
-}
-
-async function downloadZip() {
-  if (!window.JSZip) { alert('JSZip not loaded yet, try again in a moment.'); return; }
-  const zip = new JSZip();
-  for (const f of state.currentFiles) zip.file(f.path, f.content);
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'project.zip'; a.click();
-  URL.revokeObjectURL(url);
+function updateProjectButton() {
+  $("projectModeBtn")?.classList.toggle("active", state.projectMode);
 }
 
 function updateTempBadge() {
-  const conv = state.conversations[state.activeId];
-  const badge = document.getElementById('tempBadge');
-  if (conv?.temp) badge.classList.remove('hidden');
-  else badge.classList.add('hidden');
-}
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function copyCode(btn) {
-  const code = btn.closest('pre').querySelector('code');
-  navigator.clipboard.writeText(code.innerText).then(() => {
-    btn.textContent = 'Copied!';
-    setTimeout(() => btn.textContent = 'Copy', 1800);
-  });
-}
-
-function modelLabel(m) {
-  return {
-    'qwen/qwen3-coder-480b-a35b-instruct': 'Qwen3 Coder 480B',
-    'meta/llama-3.1-405b-instruct': 'Llama 3.1 405B',
-    'nvidia/llama-3.1-nemotron-ultra-253b-v1': 'Nemotron Ultra 253B',
-    'mistralai/mistral-large-2-instruct': 'Mistral Large 2',
-  }[m] || m;
+  const conversation = state.conversations[state.activeId];
+  $("tempPill")?.classList.toggle("hidden", !conversation?.temp);
 }
 
 function updateModelBadge() {
-  document.getElementById('modelBadge').textContent = modelLabel(state.model);
-  document.getElementById('emptyModelName').textContent = modelLabel(state.model);
+  const label = modelLabel(state.model);
+  if ($("modelBadge")) $("modelBadge").textContent = label;
+  if ($("emptyModel")) $("emptyModel").textContent = label;
 }
 
-// ── SETTINGS ───────────────────────────────────────────────
+function updateContextRing() {
+  const conversation = state.conversations[state.activeId];
+  const text = [
+    state.systemPrompt,
+    $("messageInput")?.value || "",
+    ...(conversation?.messages || []).map((message) => message.content),
+    ...state.attachments.map((file) => file.content || file.name),
+  ].join("\n");
+  const tokens = estimateTokens(text);
+  const pct = Math.min(100, Math.round((tokens / CONTEXT_LIMIT) * 100));
+  const bar = $("ctxBar");
+  if (bar) {
+    const circumference = 100;
+    bar.style.strokeDasharray = `${pct} ${circumference - pct}`;
+  }
+  const ring = $("ctxRingWrap");
+  if (ring) {
+    ring.title = `${tokens.toLocaleString()} / ${CONTEXT_LIMIT.toLocaleString()} estimated tokens`;
+    ring.dataset.pct = String(pct);
+  }
+}
+
+function estimateTokens(text) {
+  return Math.ceil(String(text || "").length / 4);
+}
+
+async function handleFiles(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+  const accepted = [];
+  for (const file of files.slice(0, 20)) {
+    if (file.size > MAX_ATTACH_BYTES) {
+      toast(`${file.name} is larger than 1 MB and was skipped`, "error");
+      continue;
+    }
+    const attachment = {
+      id: `f_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      language: languageFromName(file.name),
+      content: "",
+    };
+    if (file.type.startsWith("image/")) {
+      attachment.content = `[Image attachment: ${file.name}]`;
+    } else {
+      attachment.content = await file.text();
+    }
+    accepted.push(attachment);
+  }
+  state.attachments.push(...accepted);
+  if ($("fileInput")) $("fileInput").value = "";
+  renderAttachments();
+  updateSendButton();
+  updateContextRing();
+}
+
+function renderAttachments() {
+  const bar = $("attachmentsBar");
+  if (!bar) return;
+  bar.classList.toggle("hidden", !state.attachments.length);
+  bar.innerHTML = state.attachments.map((file) => `
+    <div class="attachment-pill">
+      <span class="file-item-icon">${escHtml(languageFromName(file.name).toUpperCase() || "FILE")}</span>
+      <span>${escHtml(file.name)}</span>
+      <small>${formatBytes(file.size)}</small>
+      <button onclick="removeAttachment('${escAttr(file.id)}')" title="Remove">x</button>
+    </div>`).join("");
+}
+
+function removeAttachment(id) {
+  state.attachments = state.attachments.filter((file) => file.id !== id);
+  renderAttachments();
+  updateSendButton();
+  updateContextRing();
+}
+
+function parseGeneratedFiles(text) {
+  if (window.NIMArtifacts) return window.NIMArtifacts.extractFiles(text);
+  return [];
+}
+
+function renderFilePanel(files) {
+  state.currentFiles = files || [];
+  const panel = $("filePanel");
+  const app = $("app");
+  if (!panel || !state.currentFiles.length) return;
+  $("fileCount").textContent = `${state.currentFiles.length} file${state.currentFiles.length === 1 ? "" : "s"}`;
+  $("fileList").innerHTML = state.currentFiles.map((file, index) => {
+    const parts = file.path.split("/");
+    const name = parts.pop();
+    const dir = parts.join("/");
+    return `
+      <button class="file-item" onclick="previewFile(${index})">
+        <span class="file-item-icon">${escHtml(languageFromName(name).toUpperCase() || "FILE")}</span>
+        <span class="file-item-info">
+          <span class="file-item-name">${escHtml(name)}</span>
+          ${dir ? `<span class="file-item-dir">${escHtml(dir)}</span>` : ""}
+        </span>
+        <span class="file-dl-btn" onclick="downloadFile(${index},event)">down</span>
+      </button>`;
+  }).join("");
+  panel.classList.remove("hidden");
+  app?.classList.add("has-files");
+}
+
+function closeFilePanel() {
+  $("filePanel")?.classList.add("hidden");
+  $("app")?.classList.remove("has-files");
+}
+
+let previewIndex = -1;
+
+function previewFile(index) {
+  const file = state.currentFiles[index];
+  if (!file) return;
+  previewIndex = index;
+  $("previewFilename").textContent = file.path;
+  const code = $("previewCode");
+  code.textContent = file.content;
+  code.className = `language-${languageFromName(file.path)}`;
+  $("filePreviewModal")?.classList.remove("hidden");
+  highlightCode($("filePreviewModal"));
+}
+
+function closeFilePreview() {
+  $("filePreviewModal")?.classList.add("hidden");
+  previewIndex = -1;
+}
+
+function downloadPreviewedFile() {
+  if (previewIndex >= 0) downloadFile(previewIndex);
+}
+
+function downloadFile(index, event) {
+  event?.stopPropagation();
+  const file = state.currentFiles[index];
+  if (!file) return;
+  downloadBlob(file.content, file.path.split("/").pop(), "text/plain");
+}
+
+async function downloadZip() {
+  if (!state.currentFiles.length) return;
+  if (!window.JSZip) {
+    toast("ZIP library has not loaded yet", "error");
+    return;
+  }
+  const zip = new JSZip();
+  for (const file of state.currentFiles) zip.file(file.path, file.content);
+  const blob = await zip.generateAsync({ type: "blob" });
+  downloadBlob(blob, "nim-project.zip");
+}
+
+function downloadBlob(content, filename, type = "application/octet-stream") {
+  const blob = content instanceof Blob ? content : new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function openSettings() {
-  document.getElementById('settingsApiKey').value = state.apiKey;
-  document.getElementById('settingsProxyUrl').value = state.proxyUrl;
-  document.getElementById('settingsModel').value = state.model;
-  document.getElementById('settingsSystemPrompt').value = state.systemPrompt;
-  document.getElementById('settingsModal').classList.remove('hidden');
+  if ($("setApiKey")) {
+    $("setApiKey").value = "";
+    $("setApiKey").placeholder = "Stored as Cloudflare NIM_API_KEY secret";
+    $("setApiKey").disabled = true;
+  }
+  $("setProxy").value = state.apiBase;
+  $("setModel").value = state.model;
+  $("setSystem").value = state.systemPrompt;
+  $("settingsModal")?.classList.remove("hidden");
 }
 
 function closeSettings() {
-  document.getElementById('settingsModal').classList.add('hidden');
+  $("settingsModal")?.classList.add("hidden");
 }
 
 function saveSettings() {
-  const k = document.getElementById('settingsApiKey').value.trim();
-  if (k) state.apiKey = k;
-  const p = document.getElementById('settingsProxyUrl').value.trim();
-  if (p) state.proxyUrl = p;
-  state.model = document.getElementById('settingsModel').value;
-  state.systemPrompt = document.getElementById('settingsSystemPrompt').value;
-  save();
+  state.apiBase = normalizeApiBase($("setProxy").value);
+  state.model = $("setModel").value;
+  state.systemPrompt = $("setSystem").value.trim() || BASE_SYSTEM_PROMPT;
+  saveLocalState();
   updateModelBadge();
+  updateContextRing();
   closeSettings();
+  toast("Settings saved");
 }
 
 function clearAllData() {
-  if (!confirm('Delete all conversations and settings?')) return;
-  localStorage.removeItem('nim_v3');
+  if (!confirm("Delete local conversations, settings, and session?")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(SESSION_KEY);
   location.reload();
 }
+
+function openSearch() {
+  $("searchOverlay")?.classList.remove("hidden");
+  $("searchInput").value = "";
+  renderSearchResults();
+  setTimeout(() => $("searchInput")?.focus(), 20);
+}
+
+function closeSearch() {
+  $("searchOverlay")?.classList.add("hidden");
+}
+
+function renderSearchResults() {
+  const query = ($("searchInput")?.value || "").toLowerCase();
+  const results = Object.entries(state.conversations)
+    .filter(([, conversation]) => {
+      if (!query) return true;
+      return conversation.title.toLowerCase().includes(query) ||
+        conversation.messages.some((message) => message.content.toLowerCase().includes(query));
+    })
+    .sort(([, a], [, b]) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 30);
+
+  $("searchResults").innerHTML = results.length ? results.map(([id, conversation]) => `
+    <button class="search-result" onclick="selectConversation('${escAttr(id)}');closeSearch();">
+      <span>${escHtml(conversation.title)}</span>
+      <small>${conversation.messages.length} messages - ${relativeTime(conversation.updatedAt || conversation.createdAt)}</small>
+    </button>`).join("") : `<div class="empty-admin">No matches</div>`;
+}
+
+function handleShortcuts(event) {
+  const mod = event.metaKey || event.ctrlKey;
+  if (mod && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    openSearch();
+  }
+  if (mod && event.key.toLowerCase() === "n") {
+    event.preventDefault();
+    newChat();
+  }
+  if (event.key === "Escape") {
+    closeSearch();
+    closeSettings();
+    $("adminPanel")?.classList.add("hidden");
+  }
+  if (event.key === "/" && document.activeElement === document.body) {
+    event.preventDefault();
+    $("messageInput")?.focus();
+  }
+}
+
+function openArtifactFromMessage(messageIndex, artifactIndex) {
+  const conversation = state.conversations[state.activeId];
+  const message = conversation?.messages?.[messageIndex];
+  if (!message || !window.NIMArtifacts) return;
+  const artifact = window.NIMArtifacts.extract(message.content)[artifactIndex];
+  if (artifact) window.NIMArtifacts.open(artifact);
+}
+
+function copyCode(button) {
+  const code = button.closest("pre")?.querySelector("code");
+  if (!code) return;
+  navigator.clipboard.writeText(code.innerText).then(() => {
+    button.textContent = "Copied";
+    setTimeout(() => { button.textContent = "Copy"; }, 1400);
+  });
+}
+
+function modelLabel(model) {
+  return MODEL_LABELS[model] || model;
+}
+
+function titleFromMessage(message) {
+  const text = String(message || "").replace(/\s+/g, " ").trim() || "New chat";
+  return text.length > 42 ? `${text.slice(0, 42)}...` : text;
+}
+
+function relativeTime(timestamp) {
+  if (!timestamp) return "";
+  const seconds = Math.max(1, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function languageFromName(name) {
+  const ext = String(name || "").split(".").pop().toLowerCase();
+  const map = {
+    js: "javascript",
+    jsx: "jsx",
+    ts: "typescript",
+    tsx: "tsx",
+    py: "python",
+    html: "html",
+    css: "css",
+    json: "json",
+    md: "markdown",
+    sh: "bash",
+    yml: "yaml",
+    yaml: "yaml",
+    go: "go",
+    rs: "rust",
+    java: "java",
+    cpp: "cpp",
+    c: "c",
+    rb: "ruby",
+    php: "php",
+    swift: "swift",
+  };
+  return map[ext] || ext.slice(0, 6);
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB"];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(size >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function toast(message, type = "info") {
+  const container = $("toastContainer");
+  if (!container) return;
+  const item = document.createElement("div");
+  item.className = `toast ${type}`;
+  item.textContent = message;
+  container.appendChild(item);
+  setTimeout(() => item.classList.add("show"), 10);
+  setTimeout(() => {
+    item.classList.remove("show");
+    setTimeout(() => item.remove(), 220);
+  }, 3400);
+}
+
+function escHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function escAttr(value) {
+  return escHtml(value).replace(/`/g, "&#096;");
+}
+
+function safeParse(raw, fallback) {
+  try {
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function togglePwEye() {
+  const input = $("gatePassword");
+  if (!input) return;
+  input.type = input.type === "password" ? "text" : "password";
+}
+
+function toggleSetup() {
+  $("setupFields")?.classList.toggle("hidden");
+  const toggle = $("setupToggle");
+  if (toggle) toggle.textContent = $("setupFields")?.classList.contains("hidden") ? "Connection settings" : "Hide connection settings";
+}
+
+window.selectConversation = selectConversation;
+window.deleteConversation = deleteConversation;
+window.closeSearch = closeSearch;
+window.removeAttachment = removeAttachment;
+window.previewFile = previewFile;
+window.downloadFile = downloadFile;
+window.openArtifactFromMessage = openArtifactFromMessage;
+window.copyCode = copyCode;
+window.togglePwEye = togglePwEye;
+window.toggleSetup = toggleSetup;
