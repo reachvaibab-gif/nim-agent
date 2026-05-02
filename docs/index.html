@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="style.css?v=3" />
+  <link rel="stylesheet" href="style.css?v=4" />
 </head>
 <body>
 
@@ -138,6 +138,12 @@
     <div class="input-area">
       <div class="input-box">
         <textarea id="messageInput" placeholder="Message NIM Chat…" rows="1" maxlength="32000"></textarea>
+        <button class="project-mode-btn" id="projectModeBtn" title="Project mode — generate full codebases">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          Project
+        </button>
         <button class="send-btn" id="sendBtn" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
@@ -188,6 +194,51 @@
   </div>
 </div>
 
+<!-- ── FILE PANEL ──────────────────────────────────── -->
+<div id="filePanel" class="file-panel hidden">
+  <div class="file-panel-header">
+    <div class="file-panel-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      <span id="fileCount">0 files</span>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button class="file-panel-btn" id="downloadAllBtn" title="Download all as ZIP">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        ZIP
+      </button>
+      <button class="icon-btn" id="closeFilePanelBtn" title="Close">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div class="file-list" id="fileList"></div>
+</div>
+
+<!-- ── FILE PREVIEW MODAL ─────────────────────────── -->
+<div id="filePreviewModal" class="modal-overlay hidden">
+  <div class="file-preview-card">
+    <div class="file-preview-header">
+      <span id="previewFilename" class="preview-filename"></span>
+      <div style="display:flex;gap:8px">
+        <button class="file-panel-btn" id="previewDownloadBtn">Download</button>
+        <button class="icon-btn" id="filePreviewClose">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <pre class="file-preview-pre"><code id="previewCode"></code></pre>
+  </div>
+</div>
+
 <!-- ── DELETE CONFIRM ─────────────────────────────────────── -->
 <div id="deleteModal" class="modal-overlay hidden">
   <div class="modal-card modal-sm">
@@ -202,6 +253,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="app.js?v=3"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
