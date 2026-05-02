@@ -2,6 +2,7 @@
 
 const STORAGE_KEY = "nim_chat_v6";
 const SESSION_KEY = "nim_session_v1";
+const DEFAULT_API_BASE = "https://nim-proxy.jookkk4.workers.dev";
 const DEFAULT_MODEL = "qwen/qwen3-coder-480b-a35b-instruct";
 const CONTEXT_LIMIT = 50000;
 const MAX_ATTACH_BYTES = 1024 * 1024;
@@ -34,7 +35,7 @@ artifact content here
 HTML artifacts must be complete standalone HTML documents when previewable.`;
 
 let state = {
-  apiBase: "",
+  apiBase: DEFAULT_API_BASE,
   token: "",
   role: "",
   expiresAt: 0,
@@ -185,7 +186,7 @@ function exposeAppApi() {
 
 function loadLocalState() {
   const data = safeParse(localStorage.getItem(STORAGE_KEY), {});
-  state.apiBase = data.apiBase || localStorage.getItem("nim_worker_url") || "";
+  state.apiBase = savedApiBase(data.apiBase || localStorage.getItem("nim_worker_url"));
   state.model = data.model || DEFAULT_MODEL;
   state.systemPrompt = data.systemPrompt || BASE_SYSTEM_PROMPT;
   state.conversations = data.conversations || {};
@@ -317,6 +318,13 @@ function setBusy(button, busy, label) {
 function normalizeApiBase(value) {
   const text = String(value || "").trim().replace(/\/+$/, "");
   return text;
+}
+
+function savedApiBase(value) {
+  const normalized = normalizeApiBase(value);
+  const pageOrigin = normalizeApiBase(location.origin);
+  if (!normalized || normalized === pageOrigin) return DEFAULT_API_BASE;
+  return normalized;
 }
 
 function api(path, options = {}, includeSession = true) {
