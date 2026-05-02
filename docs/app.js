@@ -1,6 +1,6 @@
-/* ── app.js v3 — NIM Chat ────────────────────────────────────
-   Features: streaming, markdown, conversation history,
-   delete chats, temporary chats, localStorage persistence
+/* ── app.js v4 — NIM Chat ────────────────────────────────────
+   Features: streaming (smart scroll), markdown, conversations,
+   delete/temp chats, project mode (file tree + ZIP download)
 ──────────────────────────────────────────────────────────── */
 
 function getNimEndpoint() {
@@ -17,7 +17,11 @@ let state = {
   activeId: null,
   generating: false,
   abortController: null,
+  projectMode: false,
+  currentFiles: [],
 };
+
+let autoScroll = true;
 
 let pendingDeleteId = null;
 
@@ -83,6 +87,26 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Stop
   document.getElementById('stopBtn').addEventListener('click', stopGeneration);
+
+  // Project mode toggle
+  document.getElementById('projectModeBtn').addEventListener('click', toggleProjectMode);
+
+  // File panel buttons
+  document.getElementById('downloadAllBtn').addEventListener('click', downloadZip);
+  document.getElementById('closeFilePanelBtn').addEventListener('click', () => {
+    document.getElementById('filePanel').classList.add('hidden');
+    document.getElementById('app').classList.remove('has-files');
+  });
+  document.getElementById('filePreviewClose').addEventListener('click', closeFilePreview);
+  document.getElementById('filePreviewModal').addEventListener('click', e => {
+    if (e.target === document.getElementById('filePreviewModal')) closeFilePreview();
+  });
+
+  // Smart scroll: stop auto-scrolling when user scrolls up
+  document.getElementById('messagesContainer').addEventListener('scroll', () => {
+    const c = document.getElementById('messagesContainer');
+    autoScroll = c.scrollHeight - c.scrollTop - c.clientHeight < 80;
+  });
 
   // Send
   document.getElementById('sendBtn').addEventListener('click', sendMessage);
@@ -336,7 +360,8 @@ async function sendMessage() {
   const assistantEl = appendMsgDOM({ role: 'assistant', content: '' }, assistantIdx);
   assistantEl.querySelector('.msg-content').classList.add('typing-cursor');
 
-  scrollToBottom();
+  autoScroll = true;
+  scrollToBottom(true);
 
   state.generating = true;
   state.abortController = new AbortController();
@@ -355,7 +380,7 @@ async function sendMessage() {
         model: state.model,
         messages: buildMessages(conv.messages.slice(0, -1)),
         stream: true,
-        max_tokens: 4096,
+        max_tokens: state.projectMode ? 16384 : 4096,
         temperature: 0.6,
       }),
     });
@@ -381,12 +406,27 @@ async function sendMessage() {
   } finally {
     finishGeneration(assistantEl);
     if (!conv.temp) save();
+    // After stream ends, parse project files if in project mode
+    if (state.projectMode) {
+      const lastMsg = conv.messages[conv.messages.length - 1];
+      if (lastMsg?.role === 'assistant') parseAndShowFiles(lastMsg.content);
+    }
   }
 }
 
+const PROJECT_PROMPT = `You are an expert software engineer. When creating a project, output EVERY file using this exact format — no exceptions:
+
+**path/to/filename.ext**
+\`\`\`language
+file contents here
+\`\`\`
+
+Include package.json, README.md, config files, and all source files. Write complete, production-ready code.`;
+
 function buildMessages(msgs) {
   const out = [];
-  if (state.systemPrompt) out.push({ role: 'system', content: state.systemPrompt });
+  const sys = state.projectMode ? PROJECT_PROMPT : state.systemPrompt;
+  if (sys) out.push({ role: 'system', content: sys });
   out.push(...msgs.map(m => ({ role: m.role, content: m.content })));
   return out;
 }
@@ -416,7 +456,7 @@ async function streamResponse(response, el, conv, idx) {
           conv.messages[idx].content = full;
           contentEl.innerHTML = renderMarkdown(full);
           contentEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
-          scrollToBottom();
+          scrollToBottom(); // respects autoScroll flag
         }
       } catch { /* ignore */ }
     }
@@ -448,7 +488,8 @@ function appendMsgDOM(msg, idx) {
   return el;
 }
 
-function scrollToBottom() {
+function scrollToBottom(force = false) {
+  if (!force && !autoScroll) return;
   const c = document.getElementById('messagesContainer');
   c.scrollTop = c.scrollHeight;
 }
@@ -465,6 +506,108 @@ function updateSendBtn() {
 
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+// ── PROJECT MODE ───────────────────────────────────────────
+function toggleProjectMode() {
+  state.projectMode = !state.projectMode;
+  const btn = document.getElementById('projectModeBtn');
+  btn.classList.toggle('active', state.projectMode);
+  btn.title = state.projectMode ? 'Project mode ON — click to disable' : 'Project mode — generate full codebases';
+  if (!state.projectMode) {
+    document.getElementById('filePanel').classList.add('hidden');
+    document.getElementById('app').classList.remove('has-files');
+  }
+}
+
+function parseFiles(text) {
+  const files = [];
+  const seen = new Set();
+  // Match **path/file.ext** followed by a code block
+  const re = /\*\*([^\*\n]+\.[A-Za-z0-9_]+)\*\*\s*\n```(?:[\w+-]*)\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const path = m[1].trim().replace(/^\/+/, '');
+    if (!seen.has(path)) { seen.add(path); files.push({ path, content: m[2] }); }
+  }
+  return files;
+}
+
+function parseAndShowFiles(text) {
+  const files = parseFiles(text);
+  if (!files.length) return;
+  state.currentFiles = files;
+  renderFilePanel(files);
+  document.getElementById('filePanel').classList.remove('hidden');
+  document.getElementById('app').classList.add('has-files');
+}
+
+function renderFilePanel(files) {
+  document.getElementById('fileCount').textContent = `${files.length} file${files.length !== 1 ? 's' : ''}`;
+  const list = document.getElementById('fileList');
+  list.innerHTML = files.map((f, i) => {
+    const parts = f.path.split('/');
+    const name = parts.pop();
+    const dir = parts.join('/');
+    const ext = name.split('.').pop();
+    return `<div class="file-item" onclick="previewFile(${i})">
+      <div class="file-item-icon">${fileIcon(ext)}</div>
+      <div class="file-item-info">
+        <div class="file-item-name">${escHtml(name)}</div>
+        ${dir ? `<div class="file-item-dir">${escHtml(dir)}</div>` : ''}
+      </div>
+      <button class="file-dl-btn" onclick="downloadFile(${i},event)" title="Download">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function fileIcon(ext) {
+  const icons = { js:'JS', ts:'TS', py:'PY', html:'HTML', css:'CSS',
+    json:'{}', md:'MD', sh:'SH', yml:'YML', yaml:'YML', go:'GO',
+    rs:'RS', java:'JV', cpp:'C++', c:'C', rb:'RB', php:'PHP' };
+  return icons[ext.toLowerCase()] || ext.slice(0,3).toUpperCase();
+}
+
+function previewFile(i) {
+  const f = state.currentFiles[i];
+  document.getElementById('previewFilename').textContent = f.path;
+  const code = document.getElementById('previewCode');
+  code.textContent = f.content;
+  code.className = '';
+  hljs.highlightElement(code);
+  document.getElementById('previewDownloadBtn').onclick = () => downloadFile(i, null);
+  document.getElementById('filePreviewModal').classList.remove('hidden');
+}
+
+function closeFilePreview() {
+  document.getElementById('filePreviewModal').classList.add('hidden');
+}
+
+function downloadFile(i, e) {
+  if (e) e.stopPropagation();
+  const f = state.currentFiles[i];
+  const blob = new Blob([f.content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = f.path.split('/').pop(); a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadZip() {
+  if (!window.JSZip) { alert('JSZip not loaded yet, try again in a moment.'); return; }
+  const zip = new JSZip();
+  for (const f of state.currentFiles) zip.file(f.path, f.content);
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'project.zip'; a.click();
+  URL.revokeObjectURL(url);
 }
 
 function updateTempBadge() {
