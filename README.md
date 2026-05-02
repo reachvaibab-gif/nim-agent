@@ -56,7 +56,6 @@ That's it. The agent is now fully wired to NVIDIA infrastructure.
 | **Name** | Qwen3 Coder 480B A35B Instruct |
 | **Endpoint** | `https://integrate.api.nvidia.com/v1` |
 | **Best for** | Code generation, debugging, agentic tasks |
-| **Cost** | Free (1,000 credits on signup) |
 
 ---
 
