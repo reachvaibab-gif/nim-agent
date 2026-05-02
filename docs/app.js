@@ -3,13 +3,18 @@
    conversation history (localStorage), auto-resize textarea.
 ──────────────────────────────────────────────────────────── */
 
-const NIM_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
+// API endpoint — proxied through your Cloudflare Worker to fix CORS
+// Set proxyUrl in settings to your deployed Worker URL
+function getNimEndpoint() {
+  return state.proxyUrl || 'https://integrate.api.nvidia.com/v1/chat/completions';
+}
 
 // ── STATE ──────────────────────────────────────────────────
 let state = {
   apiKey: '',
   model: 'qwen/qwen3-coder-480b-a35b-instruct',
   systemPrompt: 'You are a helpful, accurate, and thoughtful AI assistant.',
+  proxyUrl: '',        // Cloudflare Worker URL — required for browser CORS
   conversations: {},   // id → { title, messages: [] }
   activeId: null,
   generating: false,
@@ -22,6 +27,7 @@ function save() {
     apiKey: state.apiKey,
     model: state.model,
     systemPrompt: state.systemPrompt,
+    proxyUrl: state.proxyUrl,
     conversations: state.conversations,
     activeId: state.activeId,
   }));
@@ -93,12 +99,18 @@ window.addEventListener('DOMContentLoaded', () => {
 // ── ONBOARDING ─────────────────────────────────────────────
 function onboardingSubmit() {
   const key = document.getElementById('apiKeyInput').value.trim();
+  const proxy = document.getElementById('proxyUrlInput').value.trim();
   if (!key.startsWith('nvapi-')) {
     showInputError('apiKeyInput', 'Key must start with nvapi-');
     return;
   }
+  if (!proxy) {
+    showInputError('proxyUrlInput', 'Proxy URL is required — see instructions');
+    return;
+  }
   state.apiKey = key;
   state.model = document.getElementById('modelSelect').value;
+  state.proxyUrl = proxy;
   save();
   showApp();
 }
@@ -273,7 +285,8 @@ async function sendMessage() {
 
   try {
     const messages = buildMessages(conv.messages.slice(0, -1));
-    const response = await fetch(NIM_ENDPOINT, {
+    const endpoint = getNimEndpoint();
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -300,7 +313,10 @@ async function sendMessage() {
     if (err.name === 'AbortError') {
       // Stopped by user — keep partial content
     } else {
-      const errMsg = `⚠️ Error: ${err.message}`;
+      let errMsg = `⚠️ Error: ${err.message}`;
+      if (err.message.includes('fetch') || err.message.includes('network') || err.message.includes('Failed')) {
+        errMsg = `⚠️ CORS / Network Error\n\nYour Cloudflare Worker proxy URL may be incorrect or not deployed.\n\nOpen Settings and verify your Proxy URL.`;
+      }
       conv.messages[assistantIndex].content = errMsg;
       const contentEl = assistantEl.querySelector('.msg-content');
       contentEl.textContent = errMsg;
@@ -442,6 +458,7 @@ function openSettings() {
   document.getElementById('settingsApiKey').value = state.apiKey;
   document.getElementById('settingsModel').value = state.model;
   document.getElementById('settingsSystemPrompt').value = state.systemPrompt;
+  document.getElementById('settingsProxyUrl').value = state.proxyUrl;
   document.getElementById('settingsModal').classList.remove('hidden');
 }
 
@@ -454,6 +471,8 @@ function saveSettings() {
   if (key) state.apiKey = key;
   state.model = document.getElementById('settingsModel').value;
   state.systemPrompt = document.getElementById('settingsSystemPrompt').value;
+  const proxy = document.getElementById('settingsProxyUrl').value.trim();
+  if (proxy) state.proxyUrl = proxy;
   save();
   updateModelBadge();
   closeSettings();
