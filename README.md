@@ -6,12 +6,43 @@
 
 [![Model](https://img.shields.io/badge/Qwen3_Coder_480B_A35B_Instruct-76b900?style=flat-square&logo=nvidia&logoColor=white)](https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct)
 [![Engine](https://img.shields.io/badge/OpenClaude-CLI-white?style=flat-square)](https://www.npmjs.com/package/@gitlawb/openclaude)
+[![Node](https://img.shields.io/badge/Node.js-v20%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Free Credits](https://img.shields.io/badge/Free_Credits-1%2C000-76b900?style=flat-square)](https://build.nvidia.com)
 
 </div>
 
 ---
 
 NIM-Agent is a configuration guide for running **OpenClaude** — a Claude Code CLI — backed by **NVIDIA NIM** inference. This gives you access to a 480B parameter coding model for free, directly in your terminal.
+
+---
+
+## Prerequisites
+
+OpenClaude requires **Node.js v20 or higher**. Install it before proceeding.
+
+**macOS** (via Homebrew):
+```bash
+brew install node
+```
+
+**macOS/Linux** (via official installer):
+```bash
+# Download and run the installer from https://nodejs.org
+# Or use nvm (Node Version Manager):
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+nvm install 20
+nvm use 20
+```
+
+**Windows:**
+Download the LTS installer from [nodejs.org](https://nodejs.org) and run it.
+
+Verify your install:
+```bash
+node --version   # should show v20.x.x or higher
+npm --version    # should show 10.x.x or higher
+```
 
 ---
 
@@ -56,6 +87,7 @@ That's it. The agent is now fully wired to NVIDIA infrastructure.
 | **Name** | Qwen3 Coder 480B A35B Instruct |
 | **Endpoint** | `https://integrate.api.nvidia.com/v1` |
 | **Best for** | Code generation, debugging, agentic tasks |
+| **Cost** | Free (1,000 credits on signup) |
 
 ---
 
