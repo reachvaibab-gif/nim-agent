@@ -84,7 +84,7 @@ npm install -g @gitlawb/openclaude
 1. Open **[build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct](https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct)**
 2. Sign up for a free developer account
 3. Click **Get API Key** and copy the token (starts with `nvapi-`)
-4. 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
+4. 
 ### 3. Configure via the Setup Wizard
 
 Run the agent for the first time:
