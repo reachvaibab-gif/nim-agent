@@ -7,7 +7,6 @@
 [![Model](https://img.shields.io/badge/Qwen3_Coder_480B_A35B_Instruct-76b900?style=flat-square&logo=nvidia&logoColor=white)](https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct)
 [![Engine](https://img.shields.io/badge/OpenClaude-CLI-white?style=flat-square)](https://www.npmjs.com/package/@gitlawb/openclaude)
 [![Node](https://img.shields.io/badge/Node.js-v20%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Free Credits](https://img.shields.io/badge/Free_Credits-1%2C000-76b900?style=flat-square)](https://build.nvidia.com)
 
 </div>
 
@@ -57,7 +56,7 @@ sudo npm install -g @gitlawb/openclaude
 ### 2. Get your NVIDIA NIM API Key
 
 1. Open **[build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct](https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct)**
-2. Sign up for a free developer account — you receive **1,000 free credits** instantly
+2. Sign up for a free developer account
 3. Click **Get API Key** and copy the token (starts with `nvapi-`)
 
 ### 3. Configure via the Setup Wizard
@@ -87,7 +86,7 @@ That's it. The agent is now fully wired to NVIDIA infrastructure.
 | **Name** | Qwen3 Coder 480B A35B Instruct |
 | **Endpoint** | `https://integrate.api.nvidia.com/v1` |
 | **Best for** | Code generation, debugging, agentic tasks |
-| **Cost** | Free (1,000 credits on signup) |
+| **Cost** | Free |
 
 ---
 
