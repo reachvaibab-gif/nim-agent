@@ -83,6 +83,20 @@
     if (artifacts.length) open(artifacts[0]);
   }
 
+  function openLibrary(artifacts = []) {
+    if (!artifacts.length) return;
+    open({
+      type: "markdown",
+      title: `Artifact Library (${artifacts.length})`,
+      language: "markdown",
+      content: artifacts.map((artifact, index) => {
+        const source = artifact.sourceTitle ? ` from ${artifact.sourceTitle}` : "";
+        return `${index + 1}. **${artifact.title || "Artifact"}** (${artifact.type}${source})`;
+      }).join("\n"),
+      library: artifacts,
+    });
+  }
+
   function close() {
     document.getElementById("artifactPanel")?.classList.add("hidden");
     document.getElementById("app")?.classList.remove("has-artifact");
@@ -118,7 +132,7 @@
     }
 
     if (currentArtifact.type === "markdown") {
-      body.innerHTML = `<div class="artifact-markdown">${helpers.renderMarkdown ? helpers.renderMarkdown(currentArtifact.content) : escapeHtml(currentArtifact.content)}</div>`;
+      body.innerHTML = `<div class="artifact-markdown">${helpers.renderMarkdown ? helpers.renderMarkdown(currentArtifact.content) : escapeHtml(currentArtifact.content)}</div>${libraryList(currentArtifact)}`;
       highlight(body);
       return;
     }
@@ -178,6 +192,23 @@
             <small>${formatBytes(file.content.length)}</small>
           </button>`).join("")}
       </div>`;
+  }
+
+  function libraryList(artifact) {
+    if (!artifact.library?.length) return "";
+    return `
+      <div class="artifact-file-list library-list">
+        ${artifact.library.map((item, index) => `
+          <button onclick="NIMArtifacts.openLibraryItem(${index})">
+            <span>${escapeHtml(item.title || "Artifact")}</span>
+            <small>${escapeHtml(item.type || "code")}</small>
+          </button>`).join("")}
+      </div>`;
+  }
+
+  function openLibraryItem(index) {
+    const item = currentArtifact?.library?.[index];
+    if (item) open(item);
   }
 
   function openFile(index) {
@@ -355,6 +386,8 @@
     extract,
     extractFiles,
     open,
+    openLibrary,
+    openLibraryItem,
     autoOpen,
     close,
     openFile,

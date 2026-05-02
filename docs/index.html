@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"/>
-  <link rel="stylesheet" href="style.css?v=6"/>
+  <link rel="stylesheet" href="style.css?v=7"/>
 </head>
 <body>
 
@@ -68,11 +68,52 @@
         </button>
       </div>
     </div>
+    <nav class="sidebar-nav" aria-label="Primary">
+      <button class="nav-row primary" id="sidebarNewChatBtn">
+        <span class="nav-icon">+</span>
+        <span>New chat</span>
+      </button>
+      <button class="nav-row" id="navSearchBtn">
+        <span class="nav-icon">⌕</span>
+        <span>Search</span>
+      </button>
+      <button class="nav-row active" id="navChatsBtn">
+        <span class="nav-icon">◌</span>
+        <span>Chats</span>
+      </button>
+      <button class="nav-row" id="navProjectsBtn">
+        <span class="nav-icon">▱</span>
+        <span>Projects</span>
+      </button>
+      <button class="nav-row" id="navAgentsBtn">
+        <span class="nav-icon">◎</span>
+        <span>Agents</span>
+      </button>
+      <button class="nav-row" id="navArtifactsBtn">
+        <span class="nav-icon">◇</span>
+        <span>Artifacts</span>
+      </button>
+      <button class="nav-row disabled" disabled>
+        <span class="nav-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+      <button class="nav-row" id="navCustomizeBtn">
+        <span class="nav-icon">▣</span>
+        <span>Customize</span>
+      </button>
+    </nav>
+    <div class="sidebar-section-label">Recents</div>
     <div class="conv-scroll" id="conversationList"></div>
     <div class="sidebar-footer">
+      <div class="active-project-pill hidden" id="activeProjectPill"></div>
+      <div class="active-project-pill agent hidden" id="activeAgentPill"></div>
       <button class="footer-btn" id="settingsBtn">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Settings
+      </button>
+      <button class="footer-btn signout" id="signOutBtn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Sign out
       </button>
     </div>
   </aside>
@@ -83,6 +124,7 @@
       <button class="icon-btn" id="sidebarToggle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
       <div class="topbar-center">
         <span class="model-label" id="modelBadge">Qwen3 Coder 480B</span>
+        <select class="model-select hidden" id="modelSelect" title="Admin model selector"></select>
         <span class="temp-pill hidden" id="tempPill"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>Temp</span>
       </div>
       <button class="stop-btn hidden" id="stopBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>Stop</button>
@@ -190,21 +232,75 @@
 <!-- Settings -->
 <div class="modal-overlay hidden" id="settingsModal">
   <div class="modal-card">
-    <div class="modal-hdr"><h3>Settings</h3><button class="icon-btn" id="settingsClose"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-    <div class="form-group"><label>NIM API Key</label><input type="password" id="setApiKey" placeholder="Stored as Cloudflare NIM_API_KEY secret" disabled/></div>
+    <div class="modal-hdr"><div><h3>Local Session</h3><p class="modal-sub">Global model, prompt, and API settings are admin-only controls.</p></div><button class="icon-btn" id="settingsClose"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
     <div class="form-group"><label>Worker API URL</label><input type="text" id="setProxy" placeholder="https://nim-proxy.jookkk4.workers.dev"/></div>
-    <div class="form-group"><label>Model</label>
-      <select id="setModel">
-        <option value="qwen/qwen3-coder-480b-a35b-instruct">Qwen3 Coder 480B A35B (Recommended)</option>
-        <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B Instruct</option>
-        <option value="nvidia/llama-3.1-nemotron-ultra-253b-v1">Nemotron Ultra 253B</option>
-        <option value="mistralai/mistral-large-2-instruct">Mistral Large 2</option>
-      </select>
-    </div>
-    <div class="form-group"><label>System Prompt</label><textarea id="setSystem" rows="3" placeholder="You are a helpful assistant…"></textarea></div>
     <div class="modal-actions">
       <button class="btn-ghost-danger" id="clearDataBtn">Clear All Data</button>
       <button class="btn-primary" id="saveSettingsBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Agents -->
+<div class="modal-overlay hidden" id="agentsModal">
+  <div class="projects-card">
+    <div class="modal-hdr">
+      <div>
+        <h3>Agents</h3>
+        <p class="modal-sub">Admin-created agents are synced through the Worker. Schedules require a Cloudflare Cron Trigger.</p>
+      </div>
+      <button class="icon-btn" id="agentsClose"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="projects-layout">
+      <aside class="projects-list" id="agentsList"></aside>
+      <section class="project-editor">
+        <div class="form-group"><label>Agent name</label><input id="agentNameInput" placeholder="Example: Security reviewer"/></div>
+        <div class="form-group"><label>Description</label><input id="agentDescriptionInput" placeholder="What this agent is for"/></div>
+        <div class="form-group"><label>Model override</label><select id="agentModelInput"></select></div>
+        <div class="form-group"><label>Instructions</label><textarea id="agentInstructionsInput" rows="7" placeholder="Private behavior instructions injected by the Worker."></textarea></div>
+        <div class="form-group"><label>Schedule note</label><input id="agentScheduleInput" placeholder="Example: weekdays 09:00 ET after Cron Trigger setup"/></div>
+        <label class="toggle-row"><input type="checkbox" id="agentAdminOnlyInput"/> <span>Admin only</span></label>
+        <div class="modal-actions">
+          <button class="btn-ghost-danger" id="deleteAgentBtn">Delete</button>
+          <button class="btn-ghost" id="clearAgentBtn">No active agent</button>
+          <button class="btn-primary compact" id="saveAgentBtn">Save agent</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- Projects -->
+<div class="modal-overlay hidden" id="projectsModal">
+  <div class="projects-card">
+    <div class="modal-hdr">
+      <div>
+        <h3>Projects</h3>
+        <p class="modal-sub">Keep project instructions and reference context separate from normal chats.</p>
+      </div>
+      <button class="icon-btn" id="projectsClose"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="projects-layout">
+      <aside class="projects-list" id="projectsList"></aside>
+      <section class="project-editor">
+        <div class="form-group">
+          <label>Project name</label>
+          <input id="projectNameInput" placeholder="Example: Chrome extension rewrite"/>
+        </div>
+        <div class="form-group">
+          <label>Project instructions</label>
+          <textarea id="projectInstructionsInput" rows="6" placeholder="Coding standards, goals, constraints, preferred stack..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Project files and context</label>
+          <textarea id="projectContextInput" rows="8" placeholder="Paste important files, TODOs, repo notes, API contracts, or architecture context."></textarea>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-ghost-danger" id="deleteProjectBtn">Delete</button>
+          <button class="btn-ghost" id="clearProjectBtn">No active project</button>
+          <button class="btn-primary compact" id="saveProjectBtn">Save project</button>
+        </div>
+      </section>
     </div>
   </div>
 </div>
@@ -250,8 +346,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="artifacts.js?v=6"></script>
-<script src="admin.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="artifacts.js?v=7"></script>
+<script src="admin.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -40,9 +40,15 @@ let state = {
   role: "",
   expiresAt: 0,
   model: DEFAULT_MODEL,
+  allowedModels: Object.keys(MODEL_LABELS),
   systemPrompt: BASE_SYSTEM_PROMPT,
   conversations: {},
   activeId: "",
+  projects: {},
+  activeProjectId: "",
+  agents: [],
+  activeAgentId: "",
+  canCustomize: false,
   generating: false,
   abortController: null,
   projectMode: false,
@@ -84,9 +90,23 @@ function bindEvents() {
   });
 
   on("newChatBtn", "click", () => newChat());
+  on("sidebarNewChatBtn", "click", () => newChat());
   on("tempChatBtn", "click", () => newTempChat());
   on("sidebarToggle", "click", toggleSidebar);
   on("searchBtn", "click", openSearch);
+  on("navSearchBtn", "click", openSearch);
+  on("navChatsBtn", "click", focusChats);
+  on("navProjectsBtn", "click", openProjects);
+  on("navAgentsBtn", "click", openAgents);
+  on("navArtifactsBtn", "click", openArtifactsLibrary);
+  on("navCustomizeBtn", "click", openSettings);
+  on("signOutBtn", "click", logout);
+  on("modelSelect", "change", (event) => {
+    if (state.role !== "admin") return;
+    state.model = event.target.value || state.model;
+    updateModelBadge();
+    toast("Admin model selected for this session");
+  });
 
   on("settingsBtn", "click", openSettings);
   on("settingsClose", "click", closeSettings);
@@ -94,6 +114,20 @@ function bindEvents() {
   on("clearDataBtn", "click", clearAllData);
   on("settingsModal", "click", (event) => {
     if (event.target === $("settingsModal")) closeSettings();
+  });
+  on("projectsClose", "click", closeProjects);
+  on("saveProjectBtn", "click", saveProjectFromModal);
+  on("deleteProjectBtn", "click", deleteActiveProject);
+  on("clearProjectBtn", "click", clearActiveProject);
+  on("projectsModal", "click", (event) => {
+    if (event.target === $("projectsModal")) closeProjects();
+  });
+  on("agentsClose", "click", closeAgents);
+  on("saveAgentBtn", "click", saveAgentFromModal);
+  on("deleteAgentBtn", "click", deleteActiveAgent);
+  on("clearAgentBtn", "click", clearActiveAgent);
+  on("agentsModal", "click", (event) => {
+    if (event.target === $("agentsModal")) closeAgents();
   });
 
   on("deleteCancelBtn", "click", closeDeleteModal);
@@ -175,12 +209,18 @@ function exposeAppApi() {
     modelLabel,
     createChatMessage,
     sendStandalonePrompt,
+    sendAdminOnlyPrompt,
     getActiveConversation: () => state.conversations[state.activeId],
+    getActiveProject: () => state.projects[state.activeProjectId],
+    getActiveAgent: () => state.agents.find((agent) => agent.id === state.activeAgentId),
     renderFilePanel,
     parseGeneratedFiles,
     showApp,
     showGate,
     logout,
+    openProjects,
+    openAgents,
+    openArtifactsLibrary,
   };
 }
 
@@ -191,6 +231,9 @@ function loadLocalState() {
   state.systemPrompt = data.systemPrompt || BASE_SYSTEM_PROMPT;
   state.conversations = data.conversations || {};
   state.activeId = data.activeId || "";
+  state.projects = data.projects || {};
+  state.activeProjectId = state.projects[data.activeProjectId] ? data.activeProjectId : "";
+  state.activeAgentId = data.activeAgentId || "";
   state.projectMode = Boolean(data.projectMode);
 }
 
@@ -213,6 +256,9 @@ function saveLocalState() {
     systemPrompt: state.systemPrompt,
     conversations,
     activeId: state.conversations[state.activeId]?.temp ? "" : state.activeId,
+    projects: state.projects,
+    activeProjectId: state.activeProjectId,
+    activeAgentId: state.activeAgentId,
     projectMode: state.projectMode,
   }));
   if (state.apiBase) localStorage.setItem("nim_worker_url", state.apiBase);
@@ -282,19 +328,54 @@ function showApp() {
   $("app")?.classList.remove("hidden");
   document.body.classList.toggle("admin-session", state.role === "admin");
   $("adminFab")?.classList.toggle("hidden", state.role !== "admin");
+  applyRoleUi();
 
   updateModelBadge();
   updateTempBadge();
   updateProjectButton();
+  updateActiveProjectPill();
+  updateActiveAgentPill();
   renderSidebar();
   if (state.activeId && state.conversations[state.activeId]) renderMessages();
   else newChat();
   updateContextRing();
+  loadBootstrap().catch((error) => toast(error.message || "Could not sync config", "error"));
   $("messageInput")?.focus();
 }
 
-function logout() {
+async function loadBootstrap() {
+  const response = await api("/api/bootstrap");
+  if (!response.ok) throw await responseError(response);
+  const data = await response.json();
+  state.role = data.role || state.role;
+  state.canCustomize = Boolean(data.canCustomize);
+  state.allowedModels = Array.isArray(data.allowedModels) && data.allowedModels.length ? data.allowedModels : state.allowedModels;
+  state.model = data.defaultModel || state.model;
+  state.agents = Array.isArray(data.agents) ? data.agents : [];
+  if (state.activeAgentId && !state.agents.some((agent) => agent.id === state.activeAgentId)) state.activeAgentId = "";
+  applyRoleUi();
+  updateModelBadge();
+  updateModelControls();
+  updateActiveAgentPill();
+  saveLocalState();
+}
+
+function applyRoleUi() {
+  const admin = state.role === "admin";
+  document.body.classList.toggle("admin-session", admin);
+  $("settingsBtn")?.classList.toggle("hidden", !admin);
+  $("navCustomizeBtn")?.classList.toggle("hidden", !admin);
+  $("modelSelect")?.classList.toggle("hidden", !admin);
+}
+
+async function logout() {
+  api("/api/logout", { method: "POST" }).catch(() => {});
   clearSession();
+  state.generating = false;
+  state.abortController?.abort();
+  $("adminPanel")?.classList.add("hidden");
+  $("settingsModal")?.classList.add("hidden");
+  $("projectsModal")?.classList.add("hidden");
   showGate();
 }
 
@@ -351,6 +432,7 @@ function newChat() {
     title: "New chat",
     messages: [],
     temp: false,
+    projectId: state.activeProjectId || "",
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -360,6 +442,7 @@ function newChat() {
   renderSidebar();
   renderMessages();
   renderAttachments();
+  updateActiveProjectPill();
   closeFilePanel();
   $("messageInput")?.focus();
 }
@@ -371,6 +454,7 @@ function newTempChat() {
     title: "Temporary chat",
     messages: [],
     temp: true,
+    projectId: state.activeProjectId || "",
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -380,17 +464,21 @@ function newTempChat() {
   renderMessages();
   renderAttachments();
   updateTempBadge();
+  updateActiveProjectPill();
   $("messageInput")?.focus();
 }
 
 function selectConversation(id) {
   if (!state.conversations[id]) return;
   state.activeId = id;
+  const projectId = state.conversations[id].projectId || "";
+  state.activeProjectId = projectId && state.projects[projectId] ? projectId : "";
   state.attachments = [];
   saveLocalState();
   renderSidebar();
   renderMessages();
   renderAttachments();
+  updateActiveProjectPill();
   updateContextRing();
 }
 
@@ -624,6 +712,9 @@ async function sendMessage() {
       body: JSON.stringify({
         model: state.model,
         messages: buildMessages(conversation.messages.slice(0, -1)),
+        projectMode: state.projectMode,
+        projectContext: activeProjectPrompt(),
+        agentId: state.activeAgentId || "",
         stream: true,
         max_tokens: state.projectMode ? 16384 : 8192,
         temperature: 0.55,
@@ -677,14 +768,8 @@ function buildUserMessage(text) {
 }
 
 function buildMessages(messages) {
-  const inputPreview = $("messageInput")?.value || "";
-  const system = [
-    state.projectMode ? PROJECT_PROMPT : state.systemPrompt || BASE_SYSTEM_PROMPT,
-    ARTIFACT_PROMPT,
-  ].filter(Boolean).join("\n\n");
-
   const packed = [];
-  let budget = CONTEXT_LIMIT - estimateTokens(system) - estimateTokens(inputPreview) - 500;
+  let budget = CONTEXT_LIMIT - estimateTokens(activeProjectPrompt()) - estimateTokens($("messageInput")?.value || "") - 1200;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     const cost = estimateTokens(message.content) + 8;
@@ -695,11 +780,10 @@ function buildMessages(messages) {
 
   if (packed.length < messages.length) {
     packed.unshift({
-      role: "system",
+      role: "user",
       content: `${messages.length - packed.length} older messages were omitted to preserve useful context. Continue using the visible recent conversation and ask for missing details if needed.`,
     });
   }
-  packed.unshift({ role: "system", content: system });
   return packed;
 }
 
@@ -810,6 +894,24 @@ async function sendStandalonePrompt(messages, options = {}) {
   return data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "";
 }
 
+async function sendAdminOnlyPrompt(messages, options = {}) {
+  const response = await api("/api/admin-chat/proxy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: options.signal,
+    body: JSON.stringify({
+      model: options.model || state.model,
+      messages,
+      stream: false,
+      max_tokens: options.maxTokens || 4096,
+      temperature: options.temperature ?? 0.45,
+    }),
+  });
+  if (!response.ok) throw await responseError(response);
+  const data = await response.json().catch(() => ({}));
+  return data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "";
+}
+
 function updateSendButton() {
   const input = $("messageInput");
   const hasText = Boolean(input?.value.trim());
@@ -844,6 +946,42 @@ function toggleProjectMode() {
 
 function updateProjectButton() {
   $("projectModeBtn")?.classList.toggle("active", state.projectMode);
+  updateActiveProjectPill();
+}
+
+function activeProjectPrompt() {
+  const project = state.projects[state.activeProjectId];
+  if (!project) return "";
+  const parts = [
+    `Active project: ${project.name || "Untitled project"}`,
+    project.instructions ? `Project instructions:\n${project.instructions}` : "",
+    project.context ? `Project files and reference context:\n${project.context}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join("\n\n") : "";
+}
+
+function updateActiveProjectPill() {
+  const pill = $("activeProjectPill");
+  if (!pill) return;
+  const project = state.projects[state.activeProjectId];
+  pill.classList.toggle("hidden", !project);
+  if (project) {
+    pill.innerHTML = `<span>Project</span><strong>${escHtml(project.name || "Untitled")}</strong>`;
+  }
+}
+
+function activeAgent() {
+  return state.agents.find((agent) => agent.id === state.activeAgentId) || null;
+}
+
+function updateActiveAgentPill() {
+  const pill = $("activeAgentPill");
+  if (!pill) return;
+  const agent = activeAgent();
+  pill.classList.toggle("hidden", !agent);
+  if (agent) {
+    pill.innerHTML = `<span>Agent</span><strong>${escHtml(agent.name || "Untitled")}</strong>`;
+  }
 }
 
 function updateTempBadge() {
@@ -855,12 +993,27 @@ function updateModelBadge() {
   const label = modelLabel(state.model);
   if ($("modelBadge")) $("modelBadge").textContent = label;
   if ($("emptyModel")) $("emptyModel").textContent = label;
+  updateModelControls();
+}
+
+function updateModelControls() {
+  const select = $("modelSelect");
+  if (select) {
+    select.innerHTML = state.allowedModels.map((model) => `<option value="${escAttr(model)}">${escHtml(modelLabel(model))}</option>`).join("");
+    select.value = state.model;
+  }
+  const agentModel = $("agentModelInput");
+  if (agentModel) {
+    agentModel.innerHTML = `<option value="">Use global default</option>${state.allowedModels.map((model) => `<option value="${escAttr(model)}">${escHtml(modelLabel(model))}</option>`).join("")}`;
+  }
 }
 
 function updateContextRing() {
   const conversation = state.conversations[state.activeId];
   const text = [
     state.systemPrompt,
+    activeProjectPrompt(),
+    activeAgent()?.description || "",
     $("messageInput")?.value || "",
     ...(conversation?.messages || []).map((message) => message.content),
     ...state.attachments.map((file) => file.content || file.name),
@@ -1020,15 +1173,267 @@ function downloadBlob(content, filename, type = "application/octet-stream") {
   URL.revokeObjectURL(url);
 }
 
+function focusChats() {
+  closeSearch();
+  closeSettings();
+  closeProjects();
+  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  $("navChatsBtn")?.classList.add("active");
+  $("messageInput")?.focus();
+}
+
+function openProjects() {
+  renderProjects();
+  $("projectsModal")?.classList.remove("hidden");
+  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  $("navProjectsBtn")?.classList.add("active");
+  setTimeout(() => $("projectNameInput")?.focus(), 20);
+}
+
+function closeProjects() {
+  $("projectsModal")?.classList.add("hidden");
+  $("navProjectsBtn")?.classList.remove("active");
+  $("navChatsBtn")?.classList.add("active");
+}
+
+function openAgents() {
+  renderAgents();
+  $("agentsModal")?.classList.remove("hidden");
+  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  $("navAgentsBtn")?.classList.add("active");
+}
+
+function closeAgents() {
+  $("agentsModal")?.classList.add("hidden");
+  $("navAgentsBtn")?.classList.remove("active");
+  $("navChatsBtn")?.classList.add("active");
+}
+
+function renderAgents() {
+  const list = $("agentsList");
+  if (!list) return;
+  updateModelControls();
+  const admin = state.role === "admin";
+  const agents = [...state.agents].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  list.innerHTML = `
+    ${admin ? `<button class="project-new" onclick="createAgentDraft()">+ New agent</button>` : ""}
+    ${agents.length ? agents.map((agent) => `
+      <button class="project-row ${agent.id === state.activeAgentId ? "active" : ""}" onclick="selectAgent('${escAttr(agent.id)}')">
+        <strong>${escHtml(agent.name || "Untitled agent")}</strong>
+        <span>${agent.adminOnly ? "Admin only" : "Available"}${agent.schedule ? ` · ${escHtml(agent.schedule)}` : ""}</span>
+      </button>`).join("") : `<div class="empty-admin">No agents yet.</div>`}`;
+  const agent = activeAgent();
+  $("agentNameInput").value = agent?.name || "";
+  $("agentDescriptionInput").value = agent?.description || "";
+  $("agentModelInput").value = agent?.model || "";
+  $("agentInstructionsInput").value = agent?.instructions || "";
+  $("agentScheduleInput").value = agent?.schedule || "";
+  $("agentAdminOnlyInput").checked = Boolean(agent?.adminOnly);
+  ["agentNameInput", "agentDescriptionInput", "agentModelInput", "agentInstructionsInput", "agentScheduleInput", "agentAdminOnlyInput", "saveAgentBtn", "deleteAgentBtn"].forEach((id) => {
+    const element = $(id);
+    if (element) element.disabled = !admin;
+  });
+}
+
+function createAgentDraft() {
+  if (state.role !== "admin") return;
+  const id = `agent_${Date.now()}`;
+  state.agents.unshift({
+    id,
+    name: "New agent",
+    description: "",
+    instructions: "",
+    model: "",
+    schedule: "",
+    enabled: true,
+    adminOnly: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  state.activeAgentId = id;
+  renderAgents();
+  updateActiveAgentPill();
+}
+
+function selectAgent(id) {
+  if (!state.agents.some((agent) => agent.id === id)) return;
+  state.activeAgentId = id;
+  saveLocalState();
+  renderAgents();
+  updateActiveAgentPill();
+  updateContextRing();
+}
+
+async function saveAgentFromModal() {
+  if (state.role !== "admin") return toast("Admin only", "error");
+  if (!state.activeAgentId) createAgentDraft();
+  const existing = activeAgent();
+  const payload = {
+    id: state.activeAgentId,
+    name: ($("agentNameInput")?.value || "").trim() || "Untitled agent",
+    description: ($("agentDescriptionInput")?.value || "").trim(),
+    model: $("agentModelInput")?.value || "",
+    instructions: ($("agentInstructionsInput")?.value || "").trim(),
+    schedule: ($("agentScheduleInput")?.value || "").trim(),
+    adminOnly: Boolean($("agentAdminOnlyInput")?.checked),
+    enabled: true,
+    createdAt: existing?.createdAt,
+  };
+  if (!payload.instructions) return toast("Agent instructions are required", "error");
+  const response = await api("/api/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw await responseError(response);
+  const data = await response.json();
+  state.agents = [data.agent, ...state.agents.filter((agent) => agent.id !== data.agent.id)];
+  state.activeAgentId = data.agent.id;
+  saveLocalState();
+  renderAgents();
+  updateActiveAgentPill();
+  toast("Agent saved");
+}
+
+async function deleteActiveAgent() {
+  if (state.role !== "admin" || !state.activeAgentId) return;
+  const id = state.activeAgentId;
+  const response = await api(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) throw await responseError(response);
+  state.agents = state.agents.filter((agent) => agent.id !== id);
+  state.activeAgentId = "";
+  saveLocalState();
+  renderAgents();
+  updateActiveAgentPill();
+  toast("Agent deleted");
+}
+
+function clearActiveAgent() {
+  state.activeAgentId = "";
+  saveLocalState();
+  renderAgents();
+  updateActiveAgentPill();
+  updateContextRing();
+  toast("No active agent");
+}
+
+function renderProjects() {
+  const list = $("projectsList");
+  if (!list) return;
+  const entries = Object.entries(state.projects)
+    .sort(([, a], [, b]) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+  list.innerHTML = `
+    <button class="project-new" onclick="createProjectDraft()">+ New project</button>
+    ${entries.length ? entries.map(([id, project]) => `
+      <button class="project-row ${id === state.activeProjectId ? "active" : ""}" onclick="selectProject('${escAttr(id)}')">
+        <strong>${escHtml(project.name || "Untitled")}</strong>
+        <span>${project.instructions ? "Instructions" : "No instructions"} · ${relativeTime(project.updatedAt || project.createdAt)}</span>
+      </button>`).join("") : `<div class="empty-admin">No projects yet.</div>`}`;
+
+  const project = state.projects[state.activeProjectId];
+  $("projectNameInput").value = project?.name || "";
+  $("projectInstructionsInput").value = project?.instructions || "";
+  $("projectContextInput").value = project?.context || "";
+  $("deleteProjectBtn").disabled = !project;
+}
+
+function createProjectDraft() {
+  const id = `p_${Date.now()}`;
+  state.projects[id] = {
+    id,
+    name: "New project",
+    instructions: "",
+    context: "",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  state.activeProjectId = id;
+  saveLocalState();
+  renderProjects();
+  updateActiveProjectPill();
+}
+
+function selectProject(id) {
+  if (!state.projects[id]) return;
+  state.activeProjectId = id;
+  const conversation = state.conversations[state.activeId];
+  if (conversation) conversation.projectId = id;
+  saveLocalState();
+  renderProjects();
+  updateActiveProjectPill();
+  updateContextRing();
+}
+
+function saveProjectFromModal() {
+  if (!state.activeProjectId || !state.projects[state.activeProjectId]) createProjectDraft();
+  const project = state.projects[state.activeProjectId];
+  project.name = ($("projectNameInput")?.value || "").trim() || "Untitled project";
+  project.instructions = ($("projectInstructionsInput")?.value || "").trim();
+  project.context = ($("projectContextInput")?.value || "").trim();
+  project.updatedAt = Date.now();
+  const conversation = state.conversations[state.activeId];
+  if (conversation) conversation.projectId = project.id;
+  saveLocalState();
+  renderProjects();
+  updateActiveProjectPill();
+  updateContextRing();
+  toast("Project saved");
+}
+
+function deleteActiveProject() {
+  const id = state.activeProjectId;
+  if (!id || !state.projects[id]) return;
+  if (!confirm("Delete this project? Chats stay, but project context is removed.")) return;
+  delete state.projects[id];
+  state.activeProjectId = "";
+  for (const conversation of Object.values(state.conversations)) {
+    if (conversation.projectId === id) conversation.projectId = "";
+  }
+  saveLocalState();
+  renderProjects();
+  updateActiveProjectPill();
+  updateContextRing();
+}
+
+function clearActiveProject() {
+  state.activeProjectId = "";
+  const conversation = state.conversations[state.activeId];
+  if (conversation) conversation.projectId = "";
+  saveLocalState();
+  renderProjects();
+  updateActiveProjectPill();
+  updateContextRing();
+  toast("No active project");
+}
+
+function openArtifactsLibrary() {
+  const artifacts = [];
+  for (const conversation of Object.values(state.conversations)) {
+    for (const message of conversation.messages || []) {
+      if (message.role !== "assistant" || !window.NIMArtifacts) continue;
+      for (const artifact of window.NIMArtifacts.extract(message.content)) {
+        artifacts.push({ ...artifact, sourceTitle: conversation.title, sourceUpdatedAt: conversation.updatedAt || conversation.createdAt });
+      }
+    }
+  }
+  artifacts.sort((a, b) => (b.sourceUpdatedAt || 0) - (a.sourceUpdatedAt || 0));
+  if (!artifacts.length || !window.NIMArtifacts) {
+    toast("No artifacts yet");
+    return;
+  }
+  if (window.NIMArtifacts.openLibrary) window.NIMArtifacts.openLibrary(artifacts);
+  else window.NIMArtifacts.open(artifacts[0]);
+  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  $("navArtifactsBtn")?.classList.add("active");
+}
+
 function openSettings() {
-  if ($("setApiKey")) {
-    $("setApiKey").value = "";
-    $("setApiKey").placeholder = "Stored as Cloudflare NIM_API_KEY secret";
-    $("setApiKey").disabled = true;
+  if (state.role !== "admin") {
+    toast("Settings are admin only", "error");
+    return;
   }
   $("setProxy").value = state.apiBase;
-  $("setModel").value = state.model;
-  $("setSystem").value = state.systemPrompt;
   $("settingsModal")?.classList.remove("hidden");
 }
 
@@ -1038,10 +1443,7 @@ function closeSettings() {
 
 function saveSettings() {
   state.apiBase = normalizeApiBase($("setProxy").value);
-  state.model = $("setModel").value;
-  state.systemPrompt = $("setSystem").value.trim() || BASE_SYSTEM_PROMPT;
   saveLocalState();
-  updateModelBadge();
   updateContextRing();
   closeSettings();
   toast("Settings saved");
@@ -1097,6 +1499,8 @@ function handleShortcuts(event) {
   if (event.key === "Escape") {
     closeSearch();
     closeSettings();
+    closeProjects();
+    closeAgents();
     $("adminPanel")?.classList.add("hidden");
   }
   if (event.key === "/" && document.activeElement === document.body) {
@@ -1237,5 +1641,9 @@ window.previewFile = previewFile;
 window.downloadFile = downloadFile;
 window.openArtifactFromMessage = openArtifactFromMessage;
 window.copyCode = copyCode;
+window.createProjectDraft = createProjectDraft;
+window.selectProject = selectProject;
+window.createAgentDraft = createAgentDraft;
+window.selectAgent = selectAgent;
 window.togglePwEye = togglePwEye;
 window.toggleSetup = toggleSetup;

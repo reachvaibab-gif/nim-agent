@@ -139,8 +139,8 @@
     body.innerHTML = `
       <div class="admin-toolbar">
         <div>
-          <h3>Chat Records</h3>
-          <p>${cache.chats.length} user chats, ${cache.adminChats.length} admin chat records</p>
+          <h3>User Chats and Admin Chats</h3>
+          <p>${cache.chats.length} saved user chats, ${cache.adminChats.length} admin-only chat records</p>
         </div>
         <button class="art-btn" onclick="NIMAdmin.refresh()">Refresh</button>
       </div>
@@ -150,7 +150,7 @@
             .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
             .map((chat, index) => `
               <button onclick="NIMAdmin.showChat(${index})">
-                <strong>${escapeHtml(chat.private ? "[Admin] " : "")}${escapeHtml(chat.title || "Untitled")}</strong>
+                <strong><span class="chat-kind ${chat.private ? "admin" : "user"}">${chat.private ? "Admin only" : "User"}</span>${escapeHtml(chat.title || "Untitled")}</strong>
                 <span>${escapeHtml(chat.ip || "unknown")} - ${formatDate(chat.savedAt)}</span>
               </button>`).join("") || `<div class="empty-admin">No saved chats yet.</div>`}
         </div>
@@ -266,10 +266,22 @@
           <div><span>NIM endpoint</span><strong>${escapeHtml(cache.config.nimApiBaseUrl || "")}</strong></div>
         </div>
         <div class="password-config">
+          <label>Default model</label>
+          <select id="defaultModelInput">
+            ${(cache.config.allowedModels || []).map((model) => `<option value="${escapeAttr(model)}" ${model === cache.config.defaultModel ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
+          </select>
+          <label>Allowed models</label>
+          <textarea id="allowedModelsInput" rows="4" placeholder="One model id per line">${escapeHtml((cache.config.allowedModels || []).join("\n"))}</textarea>
+          <label>NIM API base URL</label>
+          <input id="nimApiBaseUrlInput" value="${escapeAttr(cache.config.nimApiBaseUrl || "")}" placeholder="https://integrate.api.nvidia.com/v1/chat/completions"/>
+          <label>Normal chat system prompt</label>
+          <textarea id="baseSystemPrompt" rows="6" placeholder="Server-side prompt for normal chats">${escapeHtml(cache.config.baseSystemPrompt || "")}</textarea>
           <label>New normal password</label>
           <input type="password" id="newUserPassword" placeholder="Leave blank to keep current"/>
           <label>New admin password</label>
           <input type="password" id="newAdminPassword" placeholder="Leave blank to keep current"/>
+          <label>Admin-only system prompt</label>
+          <textarea id="adminSystemPrompt" rows="6" placeholder="Private instructions only used by Admin Chat">${escapeHtml(cache.config.adminSystemPrompt || "")}</textarea>
           <button class="btn-primary" onclick="NIMAdmin.saveConfig()">Save config</button>
         </div>
       </div>`;
@@ -316,6 +328,11 @@
   async function saveConfig() {
     const payload = {
       maintenance: document.getElementById("maintenanceToggle").checked,
+      adminSystemPrompt: document.getElementById("adminSystemPrompt")?.value || "",
+      baseSystemPrompt: document.getElementById("baseSystemPrompt")?.value || "",
+      defaultModel: document.getElementById("defaultModelInput")?.value || "",
+      allowedModels: (document.getElementById("allowedModelsInput")?.value || "").split(/\n+/).map((item) => item.trim()).filter(Boolean),
+      nimApiBaseUrl: document.getElementById("nimApiBaseUrlInput")?.value || "",
     };
     const userPassword = document.getElementById("newUserPassword").value;
     const adminPassword = document.getElementById("newAdminPassword").value;
@@ -340,8 +357,7 @@
     document.getElementById("adminPrivateTranscript").innerHTML = renderAdminTranscript();
 
     try {
-      const response = await app.sendStandalonePrompt([
-        { role: "system", content: "You are a private admin assistant. Keep this chat separate from user chats. Help inspect operations, security, and product quality." },
+      const response = await app.sendAdminOnlyPrompt([
         ...adminMessages.map((message) => ({ role: message.role, content: message.content })),
       ], { maxTokens: 4096 });
       adminMessages.push({ role: "assistant", content: response, createdAt: Date.now() });
