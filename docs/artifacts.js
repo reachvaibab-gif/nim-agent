@@ -1,396 +1,423 @@
-/* Claude-style artifacts for NIM Chat */
+/* artifacts.js — NIM Chat artifact engine */
 
 (function () {
-  let helpers = {};
-  let currentArtifact = null;
-  let mode = "preview";
+  let _app = null;
 
-  function init(injectedHelpers = {}) {
-    helpers = injectedHelpers;
-    bind("artClose", "click", close);
-    bind("artToggle", "click", toggleMode);
-    bind("artCopy", "click", copyCurrent);
-    bind("artDownload", "click", downloadCurrent);
-  }
+  const ARTIFACT_RE = /<artifact\b([^>]*)>([\s\S]*?)<\/artifact>/gi;
+  const FILE_RE =
+    /\*\*([^\*\n]+\.[A-Za-z0-9_]+)\*\*\s*\n```(?:[\w+-]*)\n([\s\S]*?)```/g;
 
-  function bind(id, event, handler) {
-    const element = document.getElementById(id);
-    if (element) element.addEventListener(event, handler);
+  function parseAttrs(attrStr) {
+    const obj = {};
+    const re = /([\w-]+)="([^"]*)"/g;
+    let m;
+    while ((m = re.exec(attrStr)) !== null) obj[m[1]] = m[2];
+    return obj;
   }
 
   function extract(text) {
-    const source = String(text || "");
-    const artifacts = [];
-
-    const artifactRe = /<artifact\b([^>]*)>([\s\S]*?)<\/artifact>/gi;
-    let match;
-    while ((match = artifactRe.exec(source)) !== null) {
-      const attrs = parseAttributes(match[1]);
-      const content = match[2].trim();
-      if (!content) continue;
-      artifacts.push({
-        type: normalizeType(attrs.type || attrs.kind || languageToType(attrs.language)),
-        title: attrs.title || attrs.name || titleForContent(content, attrs.language),
-        language: attrs.language || languageFromContent(content),
-        content,
+    const results = [];
+    let m;
+    ARTIFACT_RE.lastIndex = 0;
+    while ((m = ARTIFACT_RE.exec(String(text || ""))) !== null) {
+      const attrs = parseAttrs(m[1]);
+      results.push({
+        type: attrs.type || "code",
+        title: attrs.title || "Artifact",
+        language: attrs.language || "",
+        content: m[2].trim(),
+        raw: m[0],
       });
     }
-
-    const files = extractFiles(source);
-    if (files.length) {
-      artifacts.push({
-        type: "project",
-        title: `Project (${files.length} files)`,
-        language: "text",
-        content: projectManifest(files),
-        files,
-      });
-    }
-
-    const htmlBlocks = extractCodeBlocks(source)
-      .filter((block) => block.language === "html" && looksLikeHtmlDocument(block.content));
-    for (const block of htmlBlocks) {
-      if (!artifacts.some((artifact) => artifact.content === block.content)) {
-        artifacts.push({
-          type: "html",
-          title: "HTML Preview",
-          language: "html",
-          content: block.content.trim(),
-        });
-      }
-    }
-
-    return artifacts;
-  }
-
-  function open(artifact) {
-    if (!artifact) return;
-    currentArtifact = artifact;
-    mode = artifact.type === "html" || artifact.type === "markdown" || artifact.type === "project" ? "preview" : "code";
-    render();
-    document.getElementById("artifactPanel")?.classList.remove("hidden");
-    document.getElementById("app")?.classList.add("has-artifact");
-
-    if (artifact.type === "project" && artifact.files?.length && window.NIMApp) {
-      window.NIMApp.renderFilePanel(artifact.files);
-    }
-  }
-
-  function autoOpen(text) {
-    const panel = document.getElementById("artifactPanel");
-    if (panel && !panel.classList.contains("hidden")) return;
-    const artifacts = extract(text);
-    if (artifacts.length) open(artifacts[0]);
-  }
-
-  function openLibrary(artifacts = []) {
-    if (!artifacts.length) return;
-    open({
-      type: "markdown",
-      title: `Artifact Library (${artifacts.length})`,
-      language: "markdown",
-      content: artifacts.map((artifact, index) => {
-        const source = artifact.sourceTitle ? ` from ${artifact.sourceTitle}` : "";
-        return `${index + 1}. **${artifact.title || "Artifact"}** (${artifact.type}${source})`;
-      }).join("\n"),
-      library: artifacts,
-    });
-  }
-
-  function close() {
-    document.getElementById("artifactPanel")?.classList.add("hidden");
-    document.getElementById("app")?.classList.remove("has-artifact");
-  }
-
-  function toggleMode() {
-    if (!currentArtifact) return;
-    mode = mode === "preview" ? "code" : "preview";
-    render();
-  }
-
-  function render() {
-    if (!currentArtifact) return;
-    const badge = document.getElementById("artTypeBadge");
-    const name = document.getElementById("artName");
-    const toggle = document.getElementById("artToggle");
-    const body = document.getElementById("artifactBody");
-
-    if (badge) badge.textContent = mode === "preview" ? "Preview" : "Code";
-    if (name) name.textContent = currentArtifact.title || "Artifact";
-    if (toggle) toggle.textContent = mode === "preview" ? "Code" : "Preview";
-    if (!body) return;
-
-    if (mode === "code") {
-      body.innerHTML = codeView(currentArtifact.content, currentArtifact.language);
-      highlight(body);
-      return;
-    }
-
-    if (currentArtifact.type === "html") {
-      body.innerHTML = htmlPreview(currentArtifact.content);
-      return;
-    }
-
-    if (currentArtifact.type === "markdown") {
-      body.innerHTML = `<div class="artifact-markdown">${helpers.renderMarkdown ? helpers.renderMarkdown(currentArtifact.content) : escapeHtml(currentArtifact.content)}</div>${libraryList(currentArtifact)}`;
-      highlight(body);
-      return;
-    }
-
-    if (currentArtifact.type === "project") {
-      body.innerHTML = projectPreview(currentArtifact.files || extractFiles(currentArtifact.content));
-      return;
-    }
-
-    body.innerHTML = codeView(currentArtifact.content, currentArtifact.language);
-    highlight(body);
-  }
-
-  function htmlPreview(html) {
-    const srcdoc = strictSrcdoc(html);
-    return `<iframe class="artifact-frame" sandbox="" referrerpolicy="no-referrer" srcdoc="${escapeAttr(srcdoc)}"></iframe>`;
-  }
-
-  function strictSrcdoc(html) {
-    const csp = [
-      "default-src 'none'",
-      "style-src 'unsafe-inline'",
-      "img-src data: blob:",
-      "font-src data:",
-      "connect-src 'none'",
-      "script-src 'none'",
-      "frame-src 'none'",
-      "base-uri 'none'",
-      "form-action 'none'",
-    ].join("; ");
-    if (/<head[\s>]/i.test(html)) {
-      return html.replace(/<head([^>]*)>/i, `<head$1><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}">`);
-    }
-    return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"></head><body>${html}</body></html>`;
-  }
-
-  function codeView(content, language = "text") {
-    const lang = language || "text";
-    return `<pre class="artifact-code"><code class="language-${escapeAttr(lang)}">${escapeHtml(content)}</code></pre>`;
-  }
-
-  function projectPreview(files) {
-    if (!files.length) return `<div class="artifact-empty">No files detected.</div>`;
-    const total = files.reduce((sum, file) => sum + file.content.length, 0);
-    return `
-      <div class="project-summary">
-        <div>
-          <strong>${files.length} files</strong>
-          <span>${formatBytes(total)} generated</span>
-        </div>
-        <button class="art-btn" onclick="NIMArtifacts.downloadFiles()">Download ZIP</button>
-      </div>
-      <div class="artifact-file-list">
-        ${files.map((file, index) => `
-          <button onclick="NIMArtifacts.openFile(${index})">
-            <span>${escapeHtml(file.path)}</span>
-            <small>${formatBytes(file.content.length)}</small>
-          </button>`).join("")}
-      </div>`;
-  }
-
-  function libraryList(artifact) {
-    if (!artifact.library?.length) return "";
-    return `
-      <div class="artifact-file-list library-list">
-        ${artifact.library.map((item, index) => `
-          <button onclick="NIMArtifacts.openLibraryItem(${index})">
-            <span>${escapeHtml(item.title || "Artifact")}</span>
-            <small>${escapeHtml(item.type || "code")}</small>
-          </button>`).join("")}
-      </div>`;
-  }
-
-  function openLibraryItem(index) {
-    const item = currentArtifact?.library?.[index];
-    if (item) open(item);
-  }
-
-  function openFile(index) {
-    if (!currentArtifact?.files?.[index]) return;
-    const file = currentArtifact.files[index];
-    open({
-      type: languageToType(file.language),
-      title: file.path,
-      language: file.language,
-      content: file.content,
-    });
-  }
-
-  async function downloadFiles() {
-    if (!currentArtifact?.files?.length) return;
-    if (window.NIMApp) {
-      window.NIMApp.renderFilePanel(currentArtifact.files);
-      return;
-    }
-  }
-
-  async function copyCurrent() {
-    if (!currentArtifact) return;
-    await navigator.clipboard.writeText(currentArtifact.content);
-    helpers.toast?.("Artifact copied");
-  }
-
-  function downloadCurrent() {
-    if (!currentArtifact) return;
-    downloadBlob(currentArtifact.content, filenameFor(currentArtifact), mimeFor(currentArtifact));
-  }
-
-  function downloadBlob(content, filename, type) {
-    const blob = content instanceof Blob ? content : new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function extractCodeBlocks(text) {
-    const blocks = [];
-    const re = /```([a-zA-Z0-9_+.-]*)\n([\s\S]*?)```/g;
-    let match;
-    while ((match = re.exec(String(text || ""))) !== null) {
-      blocks.push({ language: (match[1] || "text").toLowerCase(), content: match[2] });
-    }
-    return blocks;
+    return results;
   }
 
   function extractFiles(text) {
-    const source = String(text || "");
     const files = [];
     const seen = new Set();
-    const fileRe = /\*\*([^*\n]+\.[A-Za-z0-9][A-Za-z0-9_.-]*)\*\*\s*\n```([a-zA-Z0-9_+.-]*)\n([\s\S]*?)```/g;
-    let match;
-    while ((match = fileRe.exec(source)) !== null) {
-      const path = cleanPath(match[1]);
-      if (!path || seen.has(path)) continue;
-      seen.add(path);
-      files.push({ path, language: match[2] || languageFromPath(path), content: match[3] });
+    FILE_RE.lastIndex = 0;
+    let m;
+    while ((m = FILE_RE.exec(String(text || ""))) !== null) {
+      const path = m[1].trim().replace(/^\/+/, "");
+      if (!seen.has(path)) {
+        seen.add(path);
+        files.push({ path, content: m[2], language: langFromPath(path) });
+      }
+    }
+    // Also parse <artifact type="project"> blocks
+    for (const artifact of extract(text)) {
+      if (artifact.type === "project") {
+        FILE_RE.lastIndex = 0;
+        let pm;
+        while ((pm = FILE_RE.exec(artifact.content)) !== null) {
+          const path = pm[1].trim().replace(/^\/+/, "");
+          if (!seen.has(path)) {
+            seen.add(path);
+            files.push({ path, content: pm[2], language: langFromPath(path) });
+          }
+        }
+      }
     }
     return files;
   }
 
-  function parseAttributes(raw) {
-    const attrs = {};
-    const re = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
-    let match;
-    while ((match = re.exec(raw || "")) !== null) {
-      attrs[match[1]] = match[3] ?? match[4] ?? match[5] ?? "";
+  function autoOpen(text) {
+    const artifacts = extract(text);
+    if (artifacts.length) {
+      open(artifacts[0]);
+      return;
     }
-    return attrs;
-  }
-
-  function cleanPath(path) {
-    return String(path || "")
-      .trim()
-      .replace(/^\/+/, "")
-      .replace(/\.\.+/g, ".")
-      .replace(/[<>:"|?*]/g, "")
-      .slice(0, 180);
-  }
-
-  function languageToType(language = "") {
-    const lang = language.toLowerCase();
-    if (lang === "html") return "html";
-    if (lang === "md" || lang === "markdown") return "markdown";
-    return "code";
-  }
-
-  function normalizeType(type = "code") {
-    const t = String(type).toLowerCase();
-    if (["html", "markdown", "project"].includes(t)) return t;
-    return "code";
-  }
-
-  function languageFromContent(content) {
-    if (looksLikeHtmlDocument(content)) return "html";
-    return "text";
-  }
-
-  function languageFromPath(path) {
-    const ext = String(path || "").split(".").pop().toLowerCase();
-    const map = { js: "javascript", ts: "typescript", jsx: "jsx", tsx: "tsx", py: "python", html: "html", css: "css", md: "markdown", json: "json", sh: "bash", yml: "yaml", yaml: "yaml" };
-    return map[ext] || ext;
-  }
-
-  function looksLikeHtmlDocument(content) {
-    return /<!doctype html|<html[\s>]|<body[\s>]|<main[\s>]|<section[\s>]/i.test(content || "");
-  }
-
-  function titleForContent(content, language = "") {
-    if (language) return `${language.toUpperCase()} Artifact`;
-    return looksLikeHtmlDocument(content) ? "HTML Preview" : "Code Artifact";
-  }
-
-  function projectManifest(files) {
-    return files.map((file) => `**${file.path}**\n\`\`\`${file.language || ""}\n${file.content}\n\`\`\``).join("\n\n");
-  }
-
-  function filenameFor(artifact) {
-    const safe = String(artifact.title || "artifact").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "artifact";
-    const ext = artifact.type === "html" ? "html" : artifact.type === "markdown" ? "md" : extensionForLanguage(artifact.language);
-    return `${safe}.${ext}`;
-  }
-
-  function extensionForLanguage(language = "txt") {
-    const map = { javascript: "js", typescript: "ts", python: "py", markdown: "md", bash: "sh", yaml: "yml" };
-    return map[language] || language || "txt";
-  }
-
-  function mimeFor(artifact) {
-    if (artifact.type === "html") return "text/html";
-    if (artifact.type === "markdown") return "text/markdown";
-    return "text/plain";
-  }
-
-  function highlight(root) {
-    if (!window.hljs || !root) return;
-    root.querySelectorAll("pre code").forEach((code) => {
-      if (!code.dataset.highlighted) hljs.highlightElement(code);
-    });
-  }
-
-  function formatBytes(bytes) {
-    if (!bytes) return "0 B";
-    const units = ["B", "KB", "MB"];
-    let size = bytes;
-    let unit = 0;
-    while (size >= 1024 && unit < units.length - 1) {
-      size /= 1024;
-      unit += 1;
+    const files = extractFiles(text);
+    if (files.length) {
+      _app?.renderFilePanel(files);
     }
-    return `${size.toFixed(size >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
   }
 
-  function escapeHtml(value) {
-    return String(value ?? "")
+  function open(artifact) {
+    const panel = document.getElementById("artifactPanel");
+    const filePanel = document.getElementById("filePanel");
+    if (!panel) return;
+    filePanel?.classList.add("hidden");
+    document.getElementById("app")?.classList.remove("has-files");
+    panel.classList.remove("hidden");
+
+    const badge = document.getElementById("artTypeBadge");
+    const name = document.getElementById("artName");
+    const body = document.getElementById("artifactBody");
+    if (badge) badge.textContent = artifact.type.toUpperCase();
+    if (name) name.textContent = artifact.title;
+
+    _currentArtifact = artifact;
+    _viewMode = "preview";
+    renderArtifactBody(body, artifact);
+    bindArtifactControls(artifact);
+  }
+
+  let _currentArtifact = null;
+  let _viewMode = "preview";
+
+  function renderArtifactBody(body, artifact) {
+    body.innerHTML = "";
+    if (_viewMode === "code") {
+      const pre = document.createElement("pre");
+      pre.className = "artifact-code";
+      const code = document.createElement("code");
+      const lang = artifact.language || langFromType(artifact.type);
+      code.className = `language-${lang}`;
+      code.textContent = artifact.content;
+      pre.appendChild(code);
+      body.appendChild(pre);
+      if (window.hljs) hljs.highlightElement(code);
+      return;
+    }
+
+    switch (artifact.type) {
+      case "html": {
+        const frame = document.createElement("iframe");
+        frame.className = "artifact-frame";
+        frame.sandbox =
+          "allow-scripts allow-same-origin allow-forms allow-modals allow-popups";
+        body.appendChild(frame);
+        const doc = frame.contentDocument || frame.contentWindow?.document;
+        if (doc) {
+          doc.open();
+          doc.write(artifact.content);
+          doc.close();
+        }
+        break;
+      }
+      case "svg": {
+        const wrap = document.createElement("div");
+        wrap.style.cssText =
+          "display:flex;justify-content:center;align-items:center;min-height:200px;padding:16px";
+        wrap.innerHTML = artifact.content;
+        const svg = wrap.querySelector("svg");
+        if (svg) {
+          svg.style.maxWidth = "100%";
+          svg.style.height = "auto";
+        }
+        body.appendChild(wrap);
+        break;
+      }
+      case "mermaid": {
+        const wrap = document.createElement("div");
+        wrap.className = "mermaid";
+        wrap.textContent = artifact.content;
+        body.appendChild(wrap);
+        if (window.mermaid) {
+          mermaid.initialize({ theme: "dark", startOnLoad: false });
+          mermaid.run({ nodes: [wrap] });
+        } else {
+          const script = document.createElement("script");
+          script.src =
+            "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js";
+          script.onload = () => {
+            mermaid.initialize({ theme: "dark", startOnLoad: false });
+            mermaid.run({ nodes: [wrap] });
+          };
+          document.head.appendChild(script);
+        }
+        break;
+      }
+      case "markdown": {
+        const div = document.createElement("div");
+        div.className = "artifact-markdown msg-content";
+        div.innerHTML =
+          _app?.renderMarkdown(artifact.content) || artifact.content;
+        body.appendChild(div);
+        if (window.hljs)
+          div
+            .querySelectorAll("pre code")
+            .forEach((el) => hljs.highlightElement(el));
+        break;
+      }
+      case "project": {
+        const files = extractFiles(artifact.content);
+        if (files.length) {
+          const summary = document.createElement("div");
+          summary.className = "project-summary";
+          summary.innerHTML = `
+            <div class="project-info">
+              <strong>${files.length} files</strong>
+              <span>${artifact.title}</span>
+            </div>
+            <button class="art-btn" onclick="window.NIMArtifacts._openProjectFiles()">Open in side panel</button>
+          `;
+          body.appendChild(summary);
+          _pendingProjectFiles = files;
+
+          const treeContainer = document.createElement("div");
+          treeContainer.className = "project-tree";
+          renderFileTree(files, treeContainer, (index) => {
+            _previewProjectFile(index);
+          });
+          body.appendChild(treeContainer);
+        } else {
+          body.innerHTML = `<p class="artifact-empty">No files detected in project output.</p>`;
+        }
+        break;
+      }
+      default: {
+        const pre = document.createElement("pre");
+        pre.className = "artifact-code";
+        const code = document.createElement("code");
+        code.className = `language-${artifact.language || "text"}`;
+        code.textContent = artifact.content;
+        pre.appendChild(code);
+        body.appendChild(pre);
+        if (window.hljs) hljs.highlightElement(code);
+      }
+    }
+  }
+
+  let _pendingProjectFiles = [];
+
+  function bindArtifactControls(artifact) {
+    const toggleBtn = document.getElementById("artToggle");
+    const copyBtn = document.getElementById("artCopy");
+    const dlBtn = document.getElementById("artDownload");
+    const closeBtn = document.getElementById("artClose");
+    const body = document.getElementById("artifactBody");
+
+    if (toggleBtn) {
+      toggleBtn.onclick = () => {
+        _viewMode = _viewMode === "preview" ? "code" : "preview";
+        toggleBtn.textContent = _viewMode === "preview" ? "Code" : "Preview";
+        renderArtifactBody(body, artifact);
+      };
+      toggleBtn.textContent = _viewMode === "preview" ? "Code" : "Preview";
+      const noPreview = ["code", "markdown"].includes(artifact.type);
+      toggleBtn.classList.toggle("hidden", noPreview);
+    }
+
+    if (copyBtn) {
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(artifact.content).then(() => {
+          copyBtn.textContent = "Copied";
+          setTimeout(() => {
+            copyBtn.textContent = "Copy";
+          }, 1400);
+        });
+      };
+    }
+
+    if (dlBtn) {
+      dlBtn.onclick = () => {
+        const ext = artifact.language || extFromType(artifact.type);
+        const name =
+          artifact.title.replace(/[^a-z0-9_.-]/gi, "_") || "artifact";
+        downloadText(artifact.content, `${name}.${ext}`, "text/plain");
+      };
+    }
+
+    if (closeBtn) {
+      closeBtn.onclick = () =>
+        document.getElementById("artifactPanel")?.classList.add("hidden");
+    }
+  }
+
+  function openLibrary(artifacts) {
+    if (!artifacts.length) return;
+    open(artifacts[0]);
+  }
+
+  function init(appRef) {
+    _app = appRef;
+  }
+
+  function langFromPath(path) {
+    const ext = String(path || "")
+      .split(".")
+      .pop()
+      .toLowerCase();
+    const m = {
+      js: "javascript",
+      jsx: "jsx",
+      ts: "typescript",
+      tsx: "tsx",
+      py: "python",
+      html: "html",
+      css: "css",
+      json: "json",
+      md: "markdown",
+      sh: "bash",
+      yml: "yaml",
+      yaml: "yaml",
+      go: "go",
+      rs: "rust",
+      java: "java",
+      cpp: "cpp",
+      c: "c",
+      rb: "ruby",
+      php: "php",
+    };
+    return m[ext] || ext;
+  }
+
+  function langFromType(type) {
+    return (
+      { html: "html", svg: "xml", mermaid: "markdown", markdown: "markdown" }[
+        type
+      ] || "text"
+    );
+  }
+
+  function extFromType(type) {
+    return (
+      { html: "html", svg: "svg", markdown: "md", code: "txt", project: "txt" }[
+        type
+      ] || "txt"
+    );
+  }
+
+  function escHtml(v) {
+    return String(v ?? "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
+      .replace(/"/g, "&quot;");
   }
 
-  function escapeAttr(value) {
-    return escapeHtml(value).replace(/`/g, "&#096;");
+  function downloadText(content, filename, type) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function renderFileTree(files, container, onFileClick) {
+    const tree = {};
+    files.forEach((file, index) => {
+      const parts = file.path.split("/");
+      let current = tree;
+      parts.forEach((part, i) => {
+        if (i === parts.length - 1) {
+          current[part] = { _index: index, _file: file };
+        } else {
+          if (!current[part] || current[part]._index !== undefined)
+            current[part] = {};
+          current = current[part];
+        }
+      });
+    });
+
+    function createNode(name, obj, depth = 0) {
+      const el = document.createElement("div");
+      el.className = "tree-node";
+      el.style.paddingLeft = `${depth * 14}px`;
+
+      if (obj._index !== undefined) {
+        // File
+        el.classList.add("tree-file");
+        el.innerHTML = `
+          <span class="tree-icon file-icon"></span>
+          <span class="tree-name">${escHtml(name)}</span>
+        `;
+        el.onclick = () => onFileClick(obj._index);
+      } else {
+        // Folder
+        el.classList.add("tree-folder");
+        el.innerHTML = `
+          <span class="tree-icon folder-icon"></span>
+          <span class="tree-name">${escHtml(name)}</span>
+        `;
+        const children = document.createElement("div");
+        children.className = "tree-children";
+        Object.keys(obj)
+          .sort((a, b) => {
+            const aIsFile = obj[a]._index !== undefined;
+            const bIsFile = obj[b]._index !== undefined;
+            if (aIsFile === bIsFile) return a.localeCompare(b);
+            return aIsFile ? 1 : -1; // Folders first
+          })
+          .forEach((childName) => {
+            children.appendChild(createNode(childName, obj[childName], depth + 1));
+          });
+        el.appendChild(children);
+        el.onclick = (e) => {
+          e.stopPropagation();
+          el.classList.toggle("collapsed");
+        };
+      }
+      return el;
+    }
+
+    Object.keys(tree)
+      .sort((a, b) => {
+        const aIsFile = tree[a]._index !== undefined;
+        const bIsFile = tree[b]._index !== undefined;
+        if (aIsFile === bIsFile) return a.localeCompare(b);
+        return aIsFile ? 1 : -1;
+      })
+      .forEach((name) => {
+        container.appendChild(createNode(name, tree[name]));
+      });
+  }
+
+  function _previewProjectFile(i) {
+    if (_app && _pendingProjectFiles[i]) {
+      _app.state.currentFiles = _pendingProjectFiles;
+      _app.renderFilePanel(_pendingProjectFiles);
+      setTimeout(() => window.previewFile?.(i), 100);
+    }
   }
 
   window.NIMArtifacts = {
     init,
     extract,
     extractFiles,
+    autoOpen,
     open,
     openLibrary,
-    openLibraryItem,
-    autoOpen,
-    close,
-    openFile,
-    downloadFiles,
+    _openProjectFiles() {
+      if (_pendingProjectFiles.length && _app)
+        _app.renderFilePanel(_pendingProjectFiles);
+    },
+    _previewProjectFile(i) {
+      _previewProjectFile(i);
+    },
   };
 })();

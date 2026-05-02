@@ -14,7 +14,8 @@ const MODEL_LABELS = {
   "mistralai/mistral-large-2-instruct": "Mistral Large 2",
 };
 
-const BASE_SYSTEM_PROMPT = "You are NIM Chat, a precise engineering assistant. Be direct, complete, and careful. When code is useful, provide working code and explain the tradeoffs briefly.";
+const BASE_SYSTEM_PROMPT =
+  "You are NIM Chat, a precise engineering assistant. Be direct, complete, and careful. When code is useful, provide working code and explain the tradeoffs briefly.";
 const PROJECT_PROMPT = `${BASE_SYSTEM_PROMPT}
 
 When creating a full project, output complete files using this exact format:
@@ -68,7 +69,13 @@ function init() {
   bindEvents();
   exposeAppApi();
 
-  if (window.NIMArtifacts) window.NIMArtifacts.init({ getState: () => state, toast, renderMarkdown, escHtml });
+  if (window.NIMArtifacts)
+    window.NIMArtifacts.init({
+      getState: () => state,
+      toast,
+      renderMarkdown,
+      escHtml,
+    });
   if (window.NIMAdmin) window.NIMAdmin.init(window.NIMApp);
 
   if (hasValidSession()) showApp();
@@ -77,7 +84,12 @@ function init() {
 
 function configureMarkdown() {
   if (!window.marked) return;
-  marked.setOptions({ breaks: true, gfm: true, mangle: false, headerIds: false });
+  marked.setOptions({
+    breaks: true,
+    gfm: true,
+    mangle: false,
+    headerIds: false,
+  });
 }
 
 function bindEvents() {
@@ -90,15 +102,16 @@ function bindEvents() {
   });
 
   on("newChatBtn", "click", () => newChat());
+  on("newChatBtnSidebar", "click", () => newChat());
   on("sidebarNewChatBtn", "click", () => newChat());
-  on("tempChatBtn", "click", () => newTempChat());
   on("sidebarToggle", "click", toggleSidebar);
-  on("searchBtn", "click", openSearch);
+  on("sidebarCollapse", "click", toggleSidebar);
   on("navSearchBtn", "click", openSearch);
   on("navChatsBtn", "click", focusChats);
   on("navProjectsBtn", "click", openProjects);
   on("navAgentsBtn", "click", openAgents);
   on("navArtifactsBtn", "click", openArtifactsLibrary);
+  on("navAdminBtn", "click", openAdminPanel);
   on("navCustomizeBtn", "click", openSettings);
   on("signOutBtn", "click", logout);
   on("modelSelect", "change", (event) => {
@@ -148,7 +161,13 @@ function bindEvents() {
   const messagesContainer = $("messagesContainer");
   if (messagesContainer) {
     messagesContainer.addEventListener("scroll", () => {
-      autoScroll = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 96;
+      const offset =
+        messagesContainer.scrollHeight -
+        messagesContainer.scrollTop -
+        messagesContainer.clientHeight;
+      autoScroll = offset < 40;
+      const btn = $("scrollBottomBtn");
+      if (btn) btn.classList.toggle("hidden", autoScroll);
     });
   }
 
@@ -212,7 +231,8 @@ function exposeAppApi() {
     sendAdminOnlyPrompt,
     getActiveConversation: () => state.conversations[state.activeId],
     getActiveProject: () => state.projects[state.activeProjectId],
-    getActiveAgent: () => state.agents.find((agent) => agent.id === state.activeAgentId),
+    getActiveAgent: () =>
+      state.agents.find((agent) => agent.id === state.activeAgentId),
     renderFilePanel,
     parseGeneratedFiles,
     showApp,
@@ -226,19 +246,25 @@ function exposeAppApi() {
 
 function loadLocalState() {
   const data = safeParse(localStorage.getItem(STORAGE_KEY), {});
-  state.apiBase = savedApiBase(data.apiBase || localStorage.getItem("nim_worker_url"));
+  state.apiBase = savedApiBase(
+    data.apiBase || localStorage.getItem("nim_worker_url"),
+  );
   state.model = data.model || DEFAULT_MODEL;
   state.systemPrompt = data.systemPrompt || BASE_SYSTEM_PROMPT;
   state.conversations = data.conversations || {};
   state.activeId = data.activeId || "";
   state.projects = data.projects || {};
-  state.activeProjectId = state.projects[data.activeProjectId] ? data.activeProjectId : "";
+  state.activeProjectId = state.projects[data.activeProjectId]
+    ? data.activeProjectId
+    : "";
   state.activeAgentId = data.activeAgentId || "";
   state.projectMode = Boolean(data.projectMode);
 }
 
 function loadSession() {
-  const session = safeParse(sessionStorage.getItem(SESSION_KEY), null) || safeParse(localStorage.getItem(SESSION_KEY), null);
+  const session =
+    safeParse(sessionStorage.getItem(SESSION_KEY), null) ||
+    safeParse(localStorage.getItem(SESSION_KEY), null);
   if (!session) return;
   state.token = session.token || "";
   state.role = session.role || "";
@@ -250,22 +276,29 @@ function saveLocalState() {
   for (const [id, conversation] of Object.entries(state.conversations)) {
     if (!conversation.temp) conversations[id] = conversation;
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    apiBase: state.apiBase,
-    model: state.model,
-    systemPrompt: state.systemPrompt,
-    conversations,
-    activeId: state.conversations[state.activeId]?.temp ? "" : state.activeId,
-    projects: state.projects,
-    activeProjectId: state.activeProjectId,
-    activeAgentId: state.activeAgentId,
-    projectMode: state.projectMode,
-  }));
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      apiBase: state.apiBase,
+      model: state.model,
+      systemPrompt: state.systemPrompt,
+      conversations,
+      activeId: state.conversations[state.activeId]?.temp ? "" : state.activeId,
+      projects: state.projects,
+      activeProjectId: state.activeProjectId,
+      activeAgentId: state.activeAgentId,
+      projectMode: state.projectMode,
+    }),
+  );
   if (state.apiBase) localStorage.setItem("nim_worker_url", state.apiBase);
 }
 
 function saveSession() {
-  const payload = JSON.stringify({ token: state.token, role: state.role, expiresAt: state.expiresAt });
+  const payload = JSON.stringify({
+    token: state.token,
+    role: state.role,
+    expiresAt: state.expiresAt,
+  });
   localStorage.setItem(SESSION_KEY, payload);
   sessionStorage.setItem(SESSION_KEY, payload);
 }
@@ -279,7 +312,9 @@ function clearSession() {
 }
 
 function hasValidSession() {
-  return Boolean(state.token && state.expiresAt && Date.now() < state.expiresAt);
+  return Boolean(
+    state.token && state.expiresAt && Date.now() < state.expiresAt,
+  );
 }
 
 async function authenticate() {
@@ -294,11 +329,15 @@ async function authenticate() {
 
   setBusy(button, true, "Checking...");
   try {
-    const response = await api("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    }, false);
+    const response = await api(
+      "/api/auth",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      },
+      false,
+    );
     if (!response.ok) throw await responseError(response);
 
     const data = await response.json();
@@ -309,7 +348,10 @@ async function authenticate() {
     $("gatePassword").value = "";
     showApp();
   } catch (error) {
-    showGateError(error.message || "Could not authenticate. Check the password and Worker URL.");
+    showGateError(
+      error.message ||
+        "Could not authenticate. Check the password and Worker URL.",
+    );
   } finally {
     setBusy(button, false, "Continue");
   }
@@ -339,7 +381,9 @@ function showApp() {
   if (state.activeId && state.conversations[state.activeId]) renderMessages();
   else newChat();
   updateContextRing();
-  loadBootstrap().catch((error) => toast(error.message || "Could not sync config", "error"));
+  loadBootstrap().catch((error) =>
+    toast(error.message || "Could not sync config", "error"),
+  );
   $("messageInput")?.focus();
 }
 
@@ -349,10 +393,17 @@ async function loadBootstrap() {
   const data = await response.json();
   state.role = data.role || state.role;
   state.canCustomize = Boolean(data.canCustomize);
-  state.allowedModels = Array.isArray(data.allowedModels) && data.allowedModels.length ? data.allowedModels : state.allowedModels;
+  state.allowedModels =
+    Array.isArray(data.allowedModels) && data.allowedModels.length
+      ? data.allowedModels
+      : state.allowedModels;
   state.model = data.defaultModel || state.model;
   state.agents = Array.isArray(data.agents) ? data.agents : [];
-  if (state.activeAgentId && !state.agents.some((agent) => agent.id === state.activeAgentId)) state.activeAgentId = "";
+  if (
+    state.activeAgentId &&
+    !state.agents.some((agent) => agent.id === state.activeAgentId)
+  )
+    state.activeAgentId = "";
   applyRoleUi();
   updateModelBadge();
   updateModelControls();
@@ -364,8 +415,18 @@ function applyRoleUi() {
   const admin = state.role === "admin";
   document.body.classList.toggle("admin-session", admin);
   $("settingsBtn")?.classList.toggle("hidden", !admin);
+  $("navAdminBtn")?.classList.toggle("hidden", !admin);
   $("navCustomizeBtn")?.classList.toggle("hidden", !admin);
   $("modelSelect")?.classList.toggle("hidden", !admin);
+  $("modelBadge")?.classList.toggle("hidden", admin);
+}
+
+function openAdminPanel() {
+  if (state.role === "admin" && window.NIMAdmin) {
+    window.NIMAdmin.openPanel();
+  } else {
+    toast("Admin only", "error");
+  }
 }
 
 async function logout() {
@@ -397,7 +458,9 @@ function setBusy(button, busy, label) {
 }
 
 function normalizeApiBase(value) {
-  const text = String(value || "").trim().replace(/\/+$/, "");
+  const text = String(value || "")
+    .trim()
+    .replace(/\/+$/, "");
   return text;
 }
 
@@ -472,7 +535,8 @@ function selectConversation(id) {
   if (!state.conversations[id]) return;
   state.activeId = id;
   const projectId = state.conversations[id].projectId || "";
-  state.activeProjectId = projectId && state.projects[projectId] ? projectId : "";
+  state.activeProjectId =
+    projectId && state.projects[projectId] ? projectId : "";
   state.attachments = [];
   saveLocalState();
   renderSidebar();
@@ -511,8 +575,10 @@ function confirmDelete() {
 function renderSidebar() {
   const list = $("conversationList");
   if (!list) return;
-  const entries = Object.entries(state.conversations)
-    .sort(([, a], [, b]) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  const entries = Object.entries(state.conversations).sort(
+    ([, a], [, b]) =>
+      (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0),
+  );
 
   if (!entries.length) {
     list.innerHTML = `<div class="sidebar-empty">No conversations yet</div>`;
@@ -520,10 +586,12 @@ function renderSidebar() {
   }
 
   const groups = groupConversations(entries);
-  list.innerHTML = Object.entries(groups).map(([label, items]) => {
-    if (!items.length) return "";
-    return `<div class="conv-group-label">${label}</div>${items.map(([id, conversation]) => conversationRow(id, conversation)).join("")}`;
-  }).join("");
+  list.innerHTML = Object.entries(groups)
+    .map(([label, items]) => {
+      if (!items.length) return "";
+      return `<div class="conv-group-label">${label}</div>${items.map(([id, conversation]) => conversationRow(id, conversation)).join("")}`;
+    })
+    .join("");
 }
 
 function groupConversations(entries) {
@@ -533,7 +601,8 @@ function groupConversations(entries) {
     const [, conversation] = item;
     if (conversation.temp) groups.Pinned.push(item);
     else {
-      const age = now - (conversation.updatedAt || conversation.createdAt || now);
+      const age =
+        now - (conversation.updatedAt || conversation.createdAt || now);
       if (age < 86400000) groups.Today.push(item);
       else if (age < 172800000) groups.Yesterday.push(item);
       else groups.Older.push(item);
@@ -567,7 +636,9 @@ function renderMessages() {
     return;
   }
 
-  container.innerHTML = conversation.messages.map((message, index) => buildMessageHtml(message, index)).join("");
+  container.innerHTML = conversation.messages
+    .map((message, index) => buildMessageHtml(message, index))
+    .join("");
   highlightCode(container);
   scrollToBottom(true);
 }
@@ -611,14 +682,22 @@ function buildMessageHtml(message, index) {
       </article>`;
   }
 
-  const artifacts = window.NIMArtifacts ? window.NIMArtifacts.extract(message.content) : [];
-  const artifactButtons = artifacts.length ? `
+  const artifacts = window.NIMArtifacts
+    ? window.NIMArtifacts.extract(message.content)
+    : [];
+  const artifactButtons = artifacts.length
+    ? `
     <div class="msg-artifacts">
-      ${artifacts.map((artifact, artifactIndex) => `
+      ${artifacts
+        .map(
+          (artifact, artifactIndex) => `
         <button class="artifact-chip" onclick="openArtifactFromMessage(${index},${artifactIndex})">
           <span>${escHtml(artifact.type.toUpperCase())}</span>${escHtml(artifact.title)}
-        </button>`).join("")}
-    </div>` : "";
+        </button>`,
+        )
+        .join("")}
+    </div>`
+    : "";
 
   return `
     <article class="message assistant" id="msg_${index}">
@@ -644,7 +723,10 @@ function renderMarkdown(text) {
     .replace(/<pre><code class="language-([^"]+)">/g, (_, lang) => {
       return `<pre><div class="code-header"><span class="code-lang">${escHtml(lang)}</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code class="language-${escAttr(lang)}">`;
     })
-    .replace(/<pre><code>/g, `<pre><div class="code-header"><span class="code-lang">code</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code>`);
+    .replace(
+      /<pre><code>/g,
+      `<pre><div class="code-header"><span class="code-lang">code</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><code>`,
+    );
 }
 
 function hardenHtml(html) {
@@ -652,11 +734,14 @@ function hardenHtml(html) {
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
     .replace(/\son\w+="[^"]*"/gi, "")
     .replace(/\son\w+='[^']*'/gi, "")
-    .replace(/href=["']javascript:[^"']*["']/gi, "href=\"#\"");
+    .replace(/href=["']javascript:[^"']*["']/gi, 'href="#"');
 }
 
 function stripArtifactBlocks(text) {
-  return String(text || "").replace(/<artifact\b[^>]*>[\s\S]*?<\/artifact>/gi, "\n\n");
+  return String(text || "").replace(
+    /<artifact\b[^>]*>[\s\S]*?<\/artifact>/gi,
+    "\n\n",
+  );
 }
 
 async function sendMessage() {
@@ -681,8 +766,13 @@ async function sendMessage() {
   conversation.messages.push(userMessage);
   conversation.updatedAt = Date.now();
 
-  if (conversation.title === "New chat" || conversation.title === "Temporary chat") {
-    conversation.title = titleFromMessage(rawText || state.attachments[0]?.name || "Attached files");
+  if (
+    conversation.title === "New chat" ||
+    conversation.title === "Temporary chat"
+  ) {
+    conversation.title = titleFromMessage(
+      rawText || state.attachments[0]?.name || "Attached files",
+    );
   }
 
   state.attachments = [];
@@ -727,7 +817,8 @@ async function sendMessage() {
   } catch (error) {
     if (error.name !== "AbortError") {
       assistantMessage.content = `Error: ${error.message || "Generation failed"}`;
-      assistantEl.querySelector(".msg-content").textContent = assistantMessage.content;
+      assistantEl.querySelector(".msg-content").textContent =
+        assistantMessage.content;
       toast(assistantMessage.content, "error");
       if (/Unauthorized/i.test(error.message)) {
         clearSession();
@@ -742,7 +833,8 @@ async function sendMessage() {
       saveLocalState();
       saveRemoteConversation(conversation).catch(() => {});
     }
-    const latest = conversation.messages[conversation.messages.length - 1]?.content || "";
+    const latest =
+      conversation.messages[conversation.messages.length - 1]?.content || "";
     const files = parseGeneratedFiles(latest);
     if (files.length) renderFilePanel(files);
     if (window.NIMArtifacts) window.NIMArtifacts.autoOpen(latest);
@@ -760,16 +852,24 @@ function createChatMessage(role, content) {
 
 function buildUserMessage(text) {
   if (!state.attachments.length) return text;
-  const attachmentText = state.attachments.map((file) => {
-    const body = file.content ? `\n\n\`\`\`${file.language || ""}\n${file.content}\n\`\`\`` : "";
-    return `Attached file: ${file.name} (${formatBytes(file.size)}, ${file.type || "unknown"})${body}`;
-  }).join("\n\n");
+  const attachmentText = state.attachments
+    .map((file) => {
+      const body = file.content
+        ? `\n\n\`\`\`${file.language || ""}\n${file.content}\n\`\`\``
+        : "";
+      return `Attached file: ${file.name} (${formatBytes(file.size)}, ${file.type || "unknown"})${body}`;
+    })
+    .join("\n\n");
   return `${text || "Use the attached files."}\n\n${attachmentText}`;
 }
 
 function buildMessages(messages) {
   const packed = [];
-  let budget = CONTEXT_LIMIT - estimateTokens(activeProjectPrompt()) - estimateTokens($("messageInput")?.value || "") - 1200;
+  let budget =
+    CONTEXT_LIMIT -
+    estimateTokens(activeProjectPrompt()) -
+    estimateTokens($("messageInput")?.value || "") -
+    1200;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     const cost = estimateTokens(message.content) + 8;
@@ -793,7 +893,9 @@ async function streamResponse(response, element, conversation, index) {
     const data = await response.json();
     const content = data?.choices?.[0]?.message?.content || "";
     conversation.messages[index].content = content;
-    element.querySelector(".msg-content").innerHTML = renderMarkdown(stripArtifactBlocks(content));
+    element.querySelector(".msg-content").innerHTML = renderMarkdown(
+      stripArtifactBlocks(content),
+    );
     return;
   }
 
@@ -814,7 +916,10 @@ async function streamResponse(response, element, conversation, index) {
       if (!data || data === "[DONE]") return;
       try {
         const parsed = JSON.parse(data);
-        const delta = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.text || "";
+        const delta =
+          parsed?.choices?.[0]?.delta?.content ||
+          parsed?.choices?.[0]?.text ||
+          "";
         if (!delta) continue;
         full += delta;
         conversation.messages[index].content = full;
@@ -929,7 +1034,11 @@ function autoResize(textarea) {
 function scrollToBottom(force = false) {
   if (!force && !autoScroll) return;
   const container = $("messagesContainer");
-  if (container) container.scrollTop = container.scrollHeight;
+  if (container) {
+    container.scrollTop = container.scrollHeight;
+    if (force) autoScroll = true;
+    $("scrollBottomBtn")?.classList.add("hidden");
+  }
 }
 
 function toggleSidebar() {
@@ -954,8 +1063,12 @@ function activeProjectPrompt() {
   if (!project) return "";
   const parts = [
     `Active project: ${project.name || "Untitled project"}`,
-    project.instructions ? `Project instructions:\n${project.instructions}` : "",
-    project.context ? `Project files and reference context:\n${project.context}` : "",
+    project.instructions
+      ? `Project instructions:\n${project.instructions}`
+      : "",
+    project.context
+      ? `Project files and reference context:\n${project.context}`
+      : "",
   ].filter(Boolean);
   return parts.length ? parts.join("\n\n") : "";
 }
@@ -998,13 +1111,22 @@ function updateModelBadge() {
 
 function updateModelControls() {
   const select = $("modelSelect");
+  const options = state.allowedModels
+    .map(
+      (id) =>
+        `<option value="${escAttr(id)}">${escHtml(modelLabel(id))}</option>`,
+    )
+    .join("");
+
   if (select) {
-    select.innerHTML = state.allowedModels.map((model) => `<option value="${escAttr(model)}">${escHtml(modelLabel(model))}</option>`).join("");
+    select.innerHTML = options;
     select.value = state.model;
   }
   const agentModel = $("agentModelInput");
   if (agentModel) {
-    agentModel.innerHTML = `<option value="">Use global default</option>${state.allowedModels.map((model) => `<option value="${escAttr(model)}">${escHtml(modelLabel(model))}</option>`).join("")}`;
+    agentModel.innerHTML = `<option value="">Use global default</option>${options}`;
+    const agent = activeAgent();
+    agentModel.value = agent?.model || "";
   }
 }
 
@@ -1071,13 +1193,17 @@ function renderAttachments() {
   const bar = $("attachmentsBar");
   if (!bar) return;
   bar.classList.toggle("hidden", !state.attachments.length);
-  bar.innerHTML = state.attachments.map((file) => `
+  bar.innerHTML = state.attachments
+    .map(
+      (file) => `
     <div class="attachment-pill">
       <span class="file-item-icon">${escHtml(languageFromName(file.name).toUpperCase() || "FILE")}</span>
       <span>${escHtml(file.name)}</span>
       <small>${formatBytes(file.size)}</small>
       <button onclick="removeAttachment('${escAttr(file.id)}')" title="Remove">x</button>
-    </div>`).join("");
+    </div>`,
+    )
+    .join("");
 }
 
 function removeAttachment(id) {
@@ -1097,12 +1223,14 @@ function renderFilePanel(files) {
   const panel = $("filePanel");
   const app = $("app");
   if (!panel || !state.currentFiles.length) return;
-  $("fileCount").textContent = `${state.currentFiles.length} file${state.currentFiles.length === 1 ? "" : "s"}`;
-  $("fileList").innerHTML = state.currentFiles.map((file, index) => {
-    const parts = file.path.split("/");
-    const name = parts.pop();
-    const dir = parts.join("/");
-    return `
+  $("fileCount").textContent =
+    `${state.currentFiles.length} file${state.currentFiles.length === 1 ? "" : "s"}`;
+  $("fileList").innerHTML = state.currentFiles
+    .map((file, index) => {
+      const parts = file.path.split("/");
+      const name = parts.pop();
+      const dir = parts.join("/");
+      return `
       <button class="file-item" onclick="previewFile(${index})">
         <span class="file-item-icon">${escHtml(languageFromName(name).toUpperCase() || "FILE")}</span>
         <span class="file-item-info">
@@ -1111,7 +1239,8 @@ function renderFilePanel(files) {
         </span>
         <span class="file-dl-btn" onclick="downloadFile(${index},event)">down</span>
       </button>`;
-  }).join("");
+    })
+    .join("");
   panel.classList.remove("hidden");
   app?.classList.add("has-files");
 }
@@ -1164,7 +1293,8 @@ async function downloadZip() {
 }
 
 function downloadBlob(content, filename, type = "application/octet-stream") {
-  const blob = content instanceof Blob ? content : new Blob([content], { type });
+  const blob =
+    content instanceof Blob ? content : new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -1177,7 +1307,9 @@ function focusChats() {
   closeSearch();
   closeSettings();
   closeProjects();
-  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  document
+    .querySelectorAll(".nav-row")
+    .forEach((button) => button.classList.remove("active"));
   $("navChatsBtn")?.classList.add("active");
   $("messageInput")?.focus();
 }
@@ -1185,7 +1317,9 @@ function focusChats() {
 function openProjects() {
   renderProjects();
   $("projectsModal")?.classList.remove("hidden");
-  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  document
+    .querySelectorAll(".nav-row")
+    .forEach((button) => button.classList.remove("active"));
   $("navProjectsBtn")?.classList.add("active");
   setTimeout(() => $("projectNameInput")?.focus(), 20);
 }
@@ -1199,7 +1333,9 @@ function closeProjects() {
 function openAgents() {
   renderAgents();
   $("agentsModal")?.classList.remove("hidden");
-  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  document
+    .querySelectorAll(".nav-row")
+    .forEach((button) => button.classList.remove("active"));
   $("navAgentsBtn")?.classList.add("active");
 }
 
@@ -1214,14 +1350,24 @@ function renderAgents() {
   if (!list) return;
   updateModelControls();
   const admin = state.role === "admin";
-  const agents = [...state.agents].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const agents = [...state.agents].sort(
+    (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0),
+  );
   list.innerHTML = `
     ${admin ? `<button class="project-new" onclick="createAgentDraft()">+ New agent</button>` : ""}
-    ${agents.length ? agents.map((agent) => `
+    ${
+      agents.length
+        ? agents
+            .map(
+              (agent) => `
       <button class="project-row ${agent.id === state.activeAgentId ? "active" : ""}" onclick="selectAgent('${escAttr(agent.id)}')">
         <strong>${escHtml(agent.name || "Untitled agent")}</strong>
         <span>${agent.adminOnly ? "Admin only" : "Available"}${agent.schedule ? ` · ${escHtml(agent.schedule)}` : ""}</span>
-      </button>`).join("") : `<div class="empty-admin">No agents yet.</div>`}`;
+      </button>`,
+            )
+            .join("")
+        : `<div class="empty-admin">No agents yet.</div>`
+    }`;
   const agent = activeAgent();
   $("agentNameInput").value = agent?.name || "";
   $("agentDescriptionInput").value = agent?.description || "";
@@ -1229,7 +1375,16 @@ function renderAgents() {
   $("agentInstructionsInput").value = agent?.instructions || "";
   $("agentScheduleInput").value = agent?.schedule || "";
   $("agentAdminOnlyInput").checked = Boolean(agent?.adminOnly);
-  ["agentNameInput", "agentDescriptionInput", "agentModelInput", "agentInstructionsInput", "agentScheduleInput", "agentAdminOnlyInput", "saveAgentBtn", "deleteAgentBtn"].forEach((id) => {
+  [
+    "agentNameInput",
+    "agentDescriptionInput",
+    "agentModelInput",
+    "agentInstructionsInput",
+    "agentScheduleInput",
+    "agentAdminOnlyInput",
+    "saveAgentBtn",
+    "deleteAgentBtn",
+  ].forEach((id) => {
     const element = $(id);
     if (element) element.disabled = !admin;
   });
@@ -1279,7 +1434,8 @@ async function saveAgentFromModal() {
     enabled: true,
     createdAt: existing?.createdAt,
   };
-  if (!payload.instructions) return toast("Agent instructions are required", "error");
+  if (!payload.instructions)
+    return toast("Agent instructions are required", "error");
   const response = await api("/api/agents", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1287,7 +1443,10 @@ async function saveAgentFromModal() {
   });
   if (!response.ok) throw await responseError(response);
   const data = await response.json();
-  state.agents = [data.agent, ...state.agents.filter((agent) => agent.id !== data.agent.id)];
+  state.agents = [
+    data.agent,
+    ...state.agents.filter((agent) => agent.id !== data.agent.id),
+  ];
   state.activeAgentId = data.agent.id;
   saveLocalState();
   renderAgents();
@@ -1298,7 +1457,9 @@ async function saveAgentFromModal() {
 async function deleteActiveAgent() {
   if (state.role !== "admin" || !state.activeAgentId) return;
   const id = state.activeAgentId;
-  const response = await api(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const response = await api(`/api/agents/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
   if (!response.ok) throw await responseError(response);
   state.agents = state.agents.filter((agent) => agent.id !== id);
   state.activeAgentId = "";
@@ -1320,16 +1481,25 @@ function clearActiveAgent() {
 function renderProjects() {
   const list = $("projectsList");
   if (!list) return;
-  const entries = Object.entries(state.projects)
-    .sort(([, a], [, b]) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const entries = Object.entries(state.projects).sort(
+    ([, a], [, b]) => (b.updatedAt || 0) - (a.updatedAt || 0),
+  );
 
   list.innerHTML = `
     <button class="project-new" onclick="createProjectDraft()">+ New project</button>
-    ${entries.length ? entries.map(([id, project]) => `
+    ${
+      entries.length
+        ? entries
+            .map(
+              ([id, project]) => `
       <button class="project-row ${id === state.activeProjectId ? "active" : ""}" onclick="selectProject('${escAttr(id)}')">
         <strong>${escHtml(project.name || "Untitled")}</strong>
         <span>${project.instructions ? "Instructions" : "No instructions"} · ${relativeTime(project.updatedAt || project.createdAt)}</span>
-      </button>`).join("") : `<div class="empty-admin">No projects yet.</div>`}`;
+      </button>`,
+            )
+            .join("")
+        : `<div class="empty-admin">No projects yet.</div>`
+    }`;
 
   const project = state.projects[state.activeProjectId];
   $("projectNameInput").value = project?.name || "";
@@ -1366,9 +1536,11 @@ function selectProject(id) {
 }
 
 function saveProjectFromModal() {
-  if (!state.activeProjectId || !state.projects[state.activeProjectId]) createProjectDraft();
+  if (!state.activeProjectId || !state.projects[state.activeProjectId])
+    createProjectDraft();
   const project = state.projects[state.activeProjectId];
-  project.name = ($("projectNameInput")?.value || "").trim() || "Untitled project";
+  project.name =
+    ($("projectNameInput")?.value || "").trim() || "Untitled project";
   project.instructions = ($("projectInstructionsInput")?.value || "").trim();
   project.context = ($("projectContextInput")?.value || "").trim();
   project.updatedAt = Date.now();
@@ -1384,7 +1556,10 @@ function saveProjectFromModal() {
 function deleteActiveProject() {
   const id = state.activeProjectId;
   if (!id || !state.projects[id]) return;
-  if (!confirm("Delete this project? Chats stay, but project context is removed.")) return;
+  if (
+    !confirm("Delete this project? Chats stay, but project context is removed.")
+  )
+    return;
   delete state.projects[id];
   state.activeProjectId = "";
   for (const conversation of Object.values(state.conversations)) {
@@ -1413,7 +1588,11 @@ function openArtifactsLibrary() {
     for (const message of conversation.messages || []) {
       if (message.role !== "assistant" || !window.NIMArtifacts) continue;
       for (const artifact of window.NIMArtifacts.extract(message.content)) {
-        artifacts.push({ ...artifact, sourceTitle: conversation.title, sourceUpdatedAt: conversation.updatedAt || conversation.createdAt });
+        artifacts.push({
+          ...artifact,
+          sourceTitle: conversation.title,
+          sourceUpdatedAt: conversation.updatedAt || conversation.createdAt,
+        });
       }
     }
   }
@@ -1422,9 +1601,12 @@ function openArtifactsLibrary() {
     toast("No artifacts yet");
     return;
   }
-  if (window.NIMArtifacts.openLibrary) window.NIMArtifacts.openLibrary(artifacts);
+  if (window.NIMArtifacts.openLibrary)
+    window.NIMArtifacts.openLibrary(artifacts);
   else window.NIMArtifacts.open(artifacts[0]);
-  document.querySelectorAll(".nav-row").forEach((button) => button.classList.remove("active"));
+  document
+    .querySelectorAll(".nav-row")
+    .forEach((button) => button.classList.remove("active"));
   $("navArtifactsBtn")?.classList.add("active");
 }
 
@@ -1473,17 +1655,27 @@ function renderSearchResults() {
   const results = Object.entries(state.conversations)
     .filter(([, conversation]) => {
       if (!query) return true;
-      return conversation.title.toLowerCase().includes(query) ||
-        conversation.messages.some((message) => message.content.toLowerCase().includes(query));
+      return (
+        conversation.title.toLowerCase().includes(query) ||
+        conversation.messages.some((message) =>
+          message.content.toLowerCase().includes(query),
+        )
+      );
     })
     .sort(([, a], [, b]) => (b.updatedAt || 0) - (a.updatedAt || 0))
     .slice(0, 30);
 
-  $("searchResults").innerHTML = results.length ? results.map(([id, conversation]) => `
+  $("searchResults").innerHTML = results.length
+    ? results
+        .map(
+          ([id, conversation]) => `
     <button class="search-result" onclick="selectConversation('${escAttr(id)}');closeSearch();">
       <span>${escHtml(conversation.title)}</span>
       <small>${conversation.messages.length} messages - ${relativeTime(conversation.updatedAt || conversation.createdAt)}</small>
-    </button>`).join("") : `<div class="empty-admin">No matches</div>`;
+    </button>`,
+        )
+        .join("")
+    : `<div class="empty-admin">No matches</div>`;
 }
 
 function handleShortcuts(event) {
@@ -1522,7 +1714,9 @@ function copyCode(button) {
   if (!code) return;
   navigator.clipboard.writeText(code.innerText).then(() => {
     button.textContent = "Copied";
-    setTimeout(() => { button.textContent = "Copy"; }, 1400);
+    setTimeout(() => {
+      button.textContent = "Copy";
+    }, 1400);
   });
 }
 
@@ -1531,7 +1725,10 @@ function modelLabel(model) {
 }
 
 function titleFromMessage(message) {
-  const text = String(message || "").replace(/\s+/g, " ").trim() || "New chat";
+  const text =
+    String(message || "")
+      .replace(/\s+/g, " ")
+      .trim() || "New chat";
   return text.length > 42 ? `${text.slice(0, 42)}...` : text;
 }
 
@@ -1548,7 +1745,10 @@ function relativeTime(timestamp) {
 }
 
 function languageFromName(name) {
-  const ext = String(name || "").split(".").pop().toLowerCase();
+  const ext = String(name || "")
+    .split(".")
+    .pop()
+    .toLowerCase();
   const map = {
     js: "javascript",
     jsx: "jsx",
@@ -1630,7 +1830,10 @@ function togglePwEye() {
 function toggleSetup() {
   $("setupFields")?.classList.toggle("hidden");
   const toggle = $("setupToggle");
-  if (toggle) toggle.textContent = $("setupFields")?.classList.contains("hidden") ? "Connection settings" : "Hide connection settings";
+  if (toggle)
+    toggle.textContent = $("setupFields")?.classList.contains("hidden")
+      ? "Connection settings"
+      : "Hide connection settings";
 }
 
 window.selectConversation = selectConversation;
