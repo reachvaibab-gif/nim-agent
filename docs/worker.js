@@ -1,7 +1,6 @@
 /**
  * NIM Chat — Cloudflare Worker CORS Proxy
- * Deploy this at: https://workers.cloudflare.com
- * Free tier: 100,000 requests/day
+ * Fixed: proper streaming SSE passthrough
  */
 
 const NIM_API = 'https://integrate.api.nvidia.com/v1/chat/completions';
@@ -10,6 +9,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Expose-Headers': '*',
 };
 
 addEventListener('fetch', event => {
@@ -23,12 +23,12 @@ async function handleRequest(request) {
   }
 
   if (request.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+    return new Response('Method not allowed', { status: 405, headers: CORS_HEADERS });
   }
 
   try {
     const body = await request.text();
-    const auth = request.headers.get('Authorization');
+    const auth = request.headers.get('Authorization') || '';
 
     const upstream = await fetch(NIM_API, {
       method: 'POST',
@@ -36,21 +36,24 @@ async function handleRequest(request) {
         'Content-Type': 'application/json',
         'Authorization': auth,
         'Accept': 'text/event-stream',
+        'Cache-Control': 'no-cache',
       },
       body,
     });
 
-    // Stream the response back with CORS headers
-    const response = new Response(upstream.body, {
-      status: upstream.status,
-      statusText: upstream.statusText,
-      headers: {
-        ...Object.fromEntries(upstream.headers.entries()),
-        ...CORS_HEADERS,
-      },
-    });
+    // Build response headers explicitly — don't spread upstream headers
+    // to avoid Transfer-Encoding / Content-Encoding conflicts
+    const responseHeaders = {
+      ...CORS_HEADERS,
+      'Content-Type': upstream.headers.get('Content-Type') || 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    };
 
-    return response;
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: responseHeaders,
+    });
 
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {
