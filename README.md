@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=32&pause=1000&color=76B900&center=true&vCenter=true&width=700&lines=NIM-Agent;Qwen3+Coder+480B+via+NVIDIA+NIM;480B+Parameters.+Free+Tier.+Zero+Config." alt="Typing Banner" />
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=32&pause=1000&color=76B900&center=true&vCenter=true&width=700&lines=NIM-Agent;Qwen3+Coder+480B+via+NVIDIA+NIM;480B+Parameters.+Zero+Config." alt="Typing Banner" />
 
 <br/>
 
@@ -32,15 +32,6 @@ Then install Node.js:
 brew install node
 ```
 
-**macOS/Linux** (via official installer):
-```bash
-# Download and run the installer from https://nodejs.org
-# Or use nvm (Node Version Manager):
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-nvm install 20
-nvm use 20
-```
-
 **Windows** (CMD):
 
 Option A — using `winget` (built into Windows 10/11):
@@ -59,9 +50,17 @@ Option C — manual download:
 3. Restart your Command Prompt after installation
 
 Verify your install:
+
+**macOS / Linux:**
 ```bash
 node --version   # should show v20.x.x or higher
 npm --version    # should show 10.x.x or higher
+```
+
+**Windows (CMD):**
+```cmd
+node --version
+npm --version
 ```
 
 ---
@@ -70,8 +69,14 @@ npm --version    # should show 10.x.x or higher
 
 ### 1. Install OpenClaude
 
+**macOS / Linux:**
 ```bash
 sudo npm install -g @gitlawb/openclaude
+```
+
+**Windows (CMD):**
+```cmd
+npm install -g @gitlawb/openclaude
 ```
 
 ### 2. Get your NVIDIA NIM API Key
