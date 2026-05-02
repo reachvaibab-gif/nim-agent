@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NIM Chat — NVIDIA NIM AI</title>
+  <meta name="description" content="Claude-style AI chat powered by NVIDIA NIM inference. Free, private, runs in your browser." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── ONBOARDING OVERLAY ────────────────────────────────── -->
+  <div id="onboarding" class="onboarding-overlay">
+    <div class="onboarding-card">
+      <div class="onboarding-logo">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+          <rect width="40" height="40" rx="10" fill="#76b900"/>
+          <path d="M10 28L20 12L30 28H10Z" fill="white"/>
+        </svg>
+        <span>NIM Chat</span>
+      </div>
+      <h1>Welcome to NIM Chat</h1>
+      <p>A Claude-style interface powered by NVIDIA NIM. Your API key is stored locally and never leaves your browser.</p>
+
+      <div class="form-group">
+        <label for="apiKeyInput">NVIDIA NIM API Key</label>
+        <input
+          type="password"
+          id="apiKeyInput"
+          placeholder="nvapi-xxxxxxxxxxxxxxxxxxxx"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <a href="https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct" target="_blank" class="get-key-link">
+          Get a free key at build.nvidia.com →
+        </a>
+      </div>
+
+      <div class="form-group">
+        <label for="modelSelect">Model</label>
+        <select id="modelSelect">
+          <option value="qwen/qwen3-coder-480b-a35b-instruct" selected>Qwen3 Coder 480B A35B Instruct (Recommended)</option>
+          <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B Instruct</option>
+          <option value="nvidia/llama-3.1-nemotron-ultra-253b-v1">Nemotron Ultra 253B</option>
+          <option value="mistralai/mistral-large-2-instruct">Mistral Large 2</option>
+        </select>
+      </div>
+
+      <button id="startBtn" class="btn-primary">Start Chatting</button>
+    </div>
+  </div>
+
+  <!-- ── MAIN APP ───────────────────────────────────────────── -->
+  <div id="app" class="app hidden">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="sidebar-brand">
+          <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+            <rect width="40" height="40" rx="10" fill="#76b900"/>
+            <path d="M10 28L20 12L30 28H10Z" fill="white"/>
+          </svg>
+          <span>NIM Chat</span>
+        </div>
+        <button class="new-chat-btn" id="newChatBtn" title="New chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="sidebar-section-label">Recent</div>
+      <div class="conversation-list" id="conversationList"></div>
+
+      <div class="sidebar-bottom">
+        <button class="settings-btn" id="settingsBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          Settings
+        </button>
+      </div>
+    </aside>
+
+    <!-- Chat Area -->
+    <main class="chat-main">
+      <!-- Top bar -->
+      <div class="chat-topbar">
+        <button class="sidebar-toggle" id="sidebarToggle">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <div class="model-badge" id="modelBadge">Qwen3 Coder 480B</div>
+        <button class="stop-btn hidden" id="stopBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+          Stop
+        </button>
+      </div>
+
+      <!-- Messages -->
+      <div class="messages-container" id="messagesContainer">
+        <div class="messages" id="messages">
+          <!-- Empty state -->
+          <div class="empty-state" id="emptyState">
+            <div class="empty-logo">
+              <svg width="56" height="56" viewBox="0 0 40 40" fill="none">
+                <rect width="40" height="40" rx="10" fill="#76b900"/>
+                <path d="M10 28L20 12L30 28H10Z" fill="white"/>
+              </svg>
+            </div>
+            <h2>How can I help you today?</h2>
+            <p>Powered by NVIDIA NIM · <span id="emptyModelName">Qwen3 Coder 480B A35B Instruct</span></p>
+            <div class="suggestions">
+              <button class="suggestion-chip" data-msg="Explain how transformers work in machine learning">Explain transformers in ML</button>
+              <button class="suggestion-chip" data-msg="Write a Python async web scraper with aiohttp">Write an async web scraper</button>
+              <button class="suggestion-chip" data-msg="Review this code and suggest improvements: ">Review my code</button>
+              <button class="suggestion-chip" data-msg="What are the best practices for REST API design?">REST API best practices</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Bar -->
+      <div class="input-area">
+        <div class="input-wrapper">
+          <textarea
+            id="messageInput"
+            placeholder="Message NIM Chat…"
+            rows="1"
+            maxlength="32000"
+          ></textarea>
+          <button class="send-btn" id="sendBtn" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+            </svg>
+          </button>
+        </div>
+        <p class="input-disclaimer">NIM Chat can make mistakes. Verify important information.</p>
+      </div>
+    </main>
+  </div>
+
+  <!-- ── SETTINGS MODAL ────────────────────────────────────── -->
+  <div id="settingsModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <button class="modal-close" id="settingsClose">✕</button>
+      </div>
+      <div class="form-group">
+        <label>API Key</label>
+        <input type="password" id="settingsApiKey" placeholder="nvapi-xxxx" />
+      </div>
+      <div class="form-group">
+        <label>Model</label>
+        <select id="settingsModel">
+          <option value="qwen/qwen3-coder-480b-a35b-instruct">Qwen3 Coder 480B A35B Instruct (Recommended)</option>
+          <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B Instruct</option>
+          <option value="nvidia/llama-3.1-nemotron-ultra-253b-v1">Nemotron Ultra 253B</option>
+          <option value="mistralai/mistral-large-2-instruct">Mistral Large 2</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>System Prompt (optional)</label>
+        <textarea id="settingsSystemPrompt" rows="3" placeholder="You are a helpful assistant..."></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-danger" id="clearDataBtn">Clear All Data</button>
+        <button class="btn-primary" id="saveSettingsBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
