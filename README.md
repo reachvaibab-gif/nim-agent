@@ -21,8 +21,6 @@ sudo npm install -g @gitlawb/openclaude
 ---
 
 ## ⚙️ 3. Interactive Setup
-You do not need to manually export environment variables. OpenClaude has a built-in interactive setup menu.
-
 1. Launch the CLI for the first time:
    ```bash
    openclaude
