@@ -1,6 +1,6 @@
 # ⚡ NIM-Agent: NVIDIA NIM Configuration Guide
 
-This repository provides instructions on how to use the standard **OpenClaude** CLI with **NVIDIA NIM** inference endpoints, defaulting to the **Qwen3 Coder 480B A35B Instruct**.
+This repository provides instructions on how to set up and use the standard **OpenClaude** CLI with **NVIDIA NIM** inference endpoints, featuring the **Qwen3 Coder 480B A35B Instruct**.
 
 ---
 
@@ -16,25 +16,19 @@ sudo npm install -g @gitlawb/openclaude
 ## 🔑 2. Get your NVIDIA NIM Key
 1. Go to the [Qwen3 Coder 480B A35B Instruct Page](https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct).
 2. Create a free account or sign in.
-3. Click **Get API Key** and copy the `nvapi-` token.
+3. Click **Get API Key** and copy the token (starts with `nvapi-`).
 
 ---
 
-## ⚙️ 3. Configure for NVIDIA NIM
-Add these exports to your shell profile (`~/.zshrc` or `~/.bashrc`) to lock in the **Qwen3 Coder 480B A35B Instruct** default.
+## ⚙️ 3. Interactive Setup
+You do not need to manually export environment variables. OpenClaude has a built-in interactive setup menu.
 
-```bash
-export CLAUDE_CODE_USE_OPENAI=1
-export OPENAI_BASE_URL="https://integrate.api.nvidia.com/v1"
-export OPENAI_API_KEY="your-nvapi-key-here"
-export OPENAI_MODEL="qwen/qwen3-coder-480b-a35b-instruct"
-```
+1. Launch the CLI for the first time:
+   ```bash
+   openclaude
+   ```
+2. When prompted to select a provider category, choose **Third Party**.
+3. Scroll down the list of providers and select **NVIDIA NIM**.
+4. Follow the on-screen instructions. When asked for your API Key, paste the `nvapi-` token you copied earlier.
 
----
-
-## 🏎️ 4. Launch
-Once configured, simply run:
-```bash
-openclaude
-```
-The agent will now use the **Qwen3 Coder 480B A35B Instruct** for all coding and reasoning tasks via NVIDIA NIM.
+The agent is now fully configured and will route all reasoning and coding tasks through the ultra-fast NVIDIA NIM infrastructure.
