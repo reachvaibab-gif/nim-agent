@@ -35,7 +35,21 @@
           spellcheck="false"
         />
         <a href="https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct" target="_blank" class="get-key-link">
-          Get a free key at build.nvidia.com →
+          Get a key at build.nvidia.com →
+        </a>
+      </div>
+
+      <div class="form-group">
+        <label for="proxyUrlInput">Cloudflare Worker Proxy URL</label>
+        <input
+          type="text"
+          id="proxyUrlInput"
+          placeholder="https://your-worker.your-name.workers.dev"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <a href="https://github.com/reachvaibab-gif/nim-agent#proxy-setup" target="_blank" class="get-key-link">
+          How to set up your free proxy →
         </a>
       </div>
 
@@ -156,6 +170,10 @@
       <div class="form-group">
         <label>API Key</label>
         <input type="password" id="settingsApiKey" placeholder="nvapi-xxxx" />
+      </div>
+      <div class="form-group">
+        <label>Proxy URL (Cloudflare Worker)</label>
+        <input type="text" id="settingsProxyUrl" placeholder="https://your-worker.your-name.workers.dev" />
       </div>
       <div class="form-group">
         <label>Model</label>
